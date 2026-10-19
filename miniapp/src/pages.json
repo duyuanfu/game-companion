@@ -1,0 +1,93 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "找陪练 - 开黑搭子",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/order/list",
+      "style": {
+        "navigationBarTitleText": "我的开黑订单",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/my/index",
+      "style": {
+        "navigationBarTitleText": "个人中心"
+      }
+    },
+    {
+      "path": "pages/hall/index",
+      "style": {
+        "navigationBarTitleText": "派单广场 - 实时抢单",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/order/create",
+      "style": {
+        "navigationBarTitleText": "确认预约订单"
+      }
+    },
+    {
+      "path": "pages/order/detail",
+      "style": {
+        "navigationBarTitleText": "订单详情与服务沟通"
+      }
+    },
+    {
+      "path": "pages/chat/index",
+      "style": {
+        "navigationBarTitleText": "开黑即时沟通房间"
+      }
+    },
+    {
+      "path": "pages/companion/apply",
+      "style": {
+        "navigationBarTitleText": "申请成为陪练师"
+      }
+    },
+    {
+      "path": "pages/companion/workbench",
+      "style": {
+        "navigationBarTitleText": "陪玩师接单工作台"
+      }
+    },
+    {
+      "path": "pages/admin/audit",
+      "style": {
+        "navigationBarTitleText": "手机端管理后台"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "开黑搭子",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "backgroundColor": "#F8F9FA"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#6366F1",
+    "borderStyle": "black",
+    "backgroundColor": "#FFFFFF",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "精选陪练"
+      },
+      {
+        "pagePath": "pages/order/list",
+        "text": "我的订单"
+      },
+      {
+        "pagePath": "pages/my/index",
+        "text": "个人中心"
+      }
+    ]
+  }
+}

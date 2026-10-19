@@ -1,0 +1,35 @@
+{
+  "name": "开黑搭子",
+  "appid": "__UNI__GAME_COMPANION",
+  "description": "游戏开黑陪练预约与即时沟通平台",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "vueVersion": "3",
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app"
+  },
+  "quickapp": {},
+  "mp-weixin": {
+    "appid": "wxd6d00a7513f90fe9",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": true
+    },
+    "usingComponents": true,
+    "permission": {
+      "scope.record": {
+        "desc": "录音功能用于陪玩师试听音频录制"
+      }
+    }
+  },
+  "h5": {
+    "title": "开黑搭子",
+    "router": {
+      "mode": "hash"
+    }
+  }
+}

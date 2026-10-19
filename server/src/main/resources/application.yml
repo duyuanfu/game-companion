@@ -1,0 +1,73 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: game-companion-server
+  profiles:
+    active: dev
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    default-property-inclusion: non_null
+
+# MyBatis Plus 配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# Knife4j 接口文档配置
+knife4j:
+  enable: true
+  openapi:
+    title: 游戏陪玩/开黑小程序 API 文档
+    description: 涵盖客户端、陪玩端与管理员手机端工作台全量接口
+    email: dev@gamecompanion.com
+    version: v1.0.0
+    group:
+      default:
+        group-name: 默认分组
+        api-rule: package
+        api-rule-resources:
+          - com.game.companion.modules
+
+# 平台业务与支付策略配置
+platform:
+  # 支付模式: mock (开发/沙箱一键模拟支付) | wechat (微信官方V3支付)
+  payment-mode: mock
+  # 平台基础抽佣比例 (例如 0.10 代表抽佣 10%)
+  commission-rate: 0.10
+  # 指定单超时流转至大厅时间 (分钟)
+  order-assign-timeout-minutes: 8
+  # 待付款超时自动关闭时间 (分钟)
+  order-pay-timeout-minutes: 15
+  # 陪玩师申请完结后，客户超时自动结单时间 (小时)
+  order-finish-timeout-hours: 24
+
+# 微信生态配置预留 (生产环境配置)
+wx:
+  miniapp:
+    appid: "wxd6d00a7513f90fe9"
+    secret: "0797974b6bc067e1d9a7f04d3dfaa3b6"
+    template-id:
+      new-order: "Hi9R8Rt60xAEsrGEL9RcR-QDs_IeUntIuLSh1YaeUkU"
+  mp:
+    appid: "your-mp-appid"
+    secret: "your-mp-secret"
+    template-id:
+      new-order: "your-template-id-for-new-order"
+  pay:
+    appId: "wxd6d00a7513f90fe9"
+    mchId: "your-mch-id"
+    apiV3Key: "your-apiv3-key"
+    keyPath: "classpath:cert/apiclient_key.pem"
