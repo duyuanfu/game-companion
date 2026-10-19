@@ -4,6 +4,8 @@
 
 ### 📚 项目核心文档与设计
 - [项目规划、核心痛点攻关方案与资质指南](./PAIN_POINTS_AND_BLUEPRINT.md)
+- [全栈研发任务与业务功能总结报告](./TASK_SUMMARY.md)
+- [核心业务数据库建表脚本 (后端资源目录)](./server/src/main/resources/init_schema.sql)
 
 ### 💻 后端工程结构 (`server/`)
 基于 **Java 17 + Spring Boot 3.2.5 + MyBatis-Plus** 搭建：
