@@ -61,6 +61,26 @@ export function getCompanionsApi(gameName?: string) {
 }
 
 /**
+ * 【准入】查询当前登录用户的陪玩师入驻与接单资格状态
+ */
+export interface CompanionStatus {
+  hasProfile: boolean;
+  auditStatus: number; // 0-待审核 1-已通过 2-已驳回
+  rejectReason?: string;
+  role: number;
+  canAcceptOrder: boolean;
+  isOnline: number;
+  realName?: string;
+}
+
+export function getMyCompanionStatusApi() {
+  return request<CompanionStatus>({
+    url: '/companion/my-status',
+    method: 'GET'
+  });
+}
+
+/**
  * 查询「我的」陪玩师工作台数据。
  * 【安全】查询主体为当前登录用户，后端不再接受 userId 覆盖参数。
  */

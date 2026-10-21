@@ -2,26 +2,38 @@
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app';
 import { execSilentLogin, diagnoseBackend } from './utils/request';
 import { getMyOrdersApi } from './api/order';
+import { getMyCompanionStatusApi } from './api/companion';
 
 let globalOrderWatcherTimer: any = null;
 let lastKnownPendingCount = 0;
 
 onLaunch(() => {
   console.log('App Launch: 开黑搭子小程序启动初始化');
-  
+
   // 启动时直接触发全局无感静默建档登录
   execSilentLogin().then(() => {
-    const role = uni.getStorageSync('currentUserRole');
-    const userId = uni.getStorageSync('currentUserId');
-    if (role === 2 && userId) {
-      startGlobalOrderWatcher(userId);
-    }
+    // 【准入】只有【审核通过】的陪练师才需要开启接单守护
+    tryStartWatcherIfApproved();
   }).catch(err => {
     console.warn('初次静默登录排队:', err);
     // 静默登录失败时做一次后端身份自检，明确区分「后端地址指错」与「登录态异常」
     diagnoseBackend();
   });
 });
+
+/**
+ * 【准入】仅当用户已通过陪玩师入驻审核时，才启动全局接单守护（红点 + 震动）
+ */
+function tryStartWatcherIfApproved() {
+  getMyCompanionStatusApi().then((res) => {
+    if (res.data && res.data.canAcceptOrder) {
+      startGlobalOrderWatcher(uni.getStorageSync('currentUserId'));
+    } else {
+      // 未通过审核：清理可能残留的红点
+      try { uni.removeTabBarBadge({ index: 1 }); } catch (e) {}
+    }
+  }).catch(() => {});
+}
 
 function fallbackMockLogin(deviceType: string) {
   wxSilentLoginApi('mock_dev_code_default', deviceType).then(loginRes => {
@@ -30,9 +42,8 @@ function fallbackMockLogin(deviceType: string) {
     uni.setStorageSync('currentUserRole', loginRes.data.role);
     console.log(`【开发环境降级建档】userId = ${loginRes.data.userId}`);
     uni.$emit('user_login_success', loginRes.data);
-    if (loginRes.data.role === 2) {
-      startGlobalOrderWatcher(loginRes.data.userId);
-    }
+    // 【准入】审核通过后才开启接单守护
+    tryStartWatcherIfApproved();
   }).catch(err => {
     console.error('开发降级登录失败:', err);
   });
@@ -74,11 +85,8 @@ function startGlobalOrderWatcher(companionUserId: number) {
 }
 
 onShow(() => {
-  const currentUserId = uni.getStorageSync('currentUserId');
-  const currentUserRole = uni.getStorageSync('currentUserRole');
-  if (currentUserId && currentUserRole === 2) {
-    startGlobalOrderWatcher(currentUserId);
-  }
+  // 【准入】回到前台时重新确认接单资格（审核状态可能已变更）
+  tryStartWatcherIfApproved();
 });
 
 onHide(() => {

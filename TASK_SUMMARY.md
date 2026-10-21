@@ -73,6 +73,22 @@
     - 未录制时 `voice_url` 保持 `NULL`、`voice_duration` 为 0，**严禁任何虚假音色兜底**；
     - 首页对未录制者降级为灰色「暂未录制原声」样式，管理员审核台明确标注「申请人未录制原声 (选填项)」；
     - 真实姓名、手机号、至少一个游戏项目及其段位截图仍为必填的资质核验底线。
+17. **陪玩师准入硬门禁（仅提交申请 ≠ 可接单）**：
+    - 新增 `GET /api/companion/my-status` 准入状态接口（hasProfile / auditStatus / rejectReason / canAcceptOrder）；
+    - 后端在 `getWorkbenchStats`、`toggleOnlineStatus`、`acceptOrder` 三处强制校验 `audit_status = 1`，
+      审核中与已驳回一律拒绝，**不依赖前端隐藏按钮**；
+    - 个人中心按真实审核状态四路分流：进入工作台 / 审核中 / 未通过可重新申请 / 去申请；
+    - 订单列表「我收到的接单」陪玩师视角与全局接单守护（红点+震动）同样以审核状态为准。
+18. **订单状态与列表分类全梳理**：
+    - 9 种订单状态（0~8）全部有专属徽章文案与配色，彻底消除「进行中」这类含糊兜底；
+    - 新增「已结束」分组（`status IN (5,6,7,8)`，后端 `orderStatus = -2`），
+      已取消 / 已退款 / 维权中 / 仲裁退款不再只出现在「全部」里；
+    - 客户视角 7 个 Tab、陪玩师视角 6 个 Tab（视角差异化），Tab 条支持横向滚动；
+    - 待接单红点角标改为独立查询 `status=1`，不再因停留在其它 Tab 而被错误清空。
+19. **结算数据可见性分级**：
+    - 客户确认完结后**不再展示任何清算账单**，后端同时从响应中剥离 `settlement` 与 `platformFee`（防抓包窥探平台利润）；
+    - 陪练师仅可见「我的收益 + 清算单号 + 到账状态」，平台毛抽佣 / 通道成本 / 平台净利不对外暴露；
+    - 完整清算对账单仅平台管理员可见。
 
 ---
 
@@ -121,7 +137,7 @@
 全部业务代码在本地通过 Maven 和 JDK 17 完成了端到端自动化单元测试验证：
 * **测试类**：`server/src/test/java/com/game/companion/OrderFlowIntegrationTest.java`
 * **执行命令**：`mvn test -Dtest=OrderFlowIntegrationTest`
-* **测试结果**：**`Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
+* **测试结果**：**`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
 
 ```text
 [INFO] -------------------------------------------------------
@@ -141,6 +157,7 @@
 ✅ test12_OrderStateMachineAndAuthorizationGuard: 状态机跳步拦截 + 越权接单/越权结单/重复清算拦截 (通过)
 ✅ test13_CommissionHotConfigActuallyAffectsSettlement: 抽佣热配置真实影响清算金额校验 (通过)
 ✅ test14_UpdateProfileAndOptionalVoice: 自助改头像昵称 + 陪练入驻录音选填 + 自定义昵称不被入驻覆盖 (通过)
+✅ test15_CompanionAdmissionAndOrderStatusGrouping: 陪玩师准入门禁 + 订单状态分类分组筛选 (通过)
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------

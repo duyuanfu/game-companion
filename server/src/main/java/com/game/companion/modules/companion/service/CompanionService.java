@@ -2,6 +2,7 @@ package com.game.companion.modules.companion.service;
 
 import com.game.companion.modules.companion.entity.CompanionSkill;
 import com.game.companion.modules.companion.vo.CompanionItemVO;
+import com.game.companion.modules.companion.vo.CompanionStatusVO;
 import com.game.companion.modules.companion.vo.CompanionWorkbenchVO;
 
 import java.util.List;
@@ -35,4 +36,9 @@ public interface CompanionService {
      * 客户申请成为陪练师 (支持申报多个擅长游戏技能项目)
      */
     void applyCompanion(Long userId, com.game.companion.modules.companion.dto.ApplyCompanionDTO dto);
+
+    /**
+     * 【准入校验】获取当前登录用户的陪玩师入驻与接单资格状态
+     */
+    CompanionStatusVO getMyCompanionStatus(Long userId);
 }

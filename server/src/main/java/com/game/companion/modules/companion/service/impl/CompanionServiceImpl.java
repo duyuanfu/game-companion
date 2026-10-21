@@ -1,6 +1,7 @@
 package com.game.companion.modules.companion.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
 import com.game.companion.modules.companion.entity.CompanionProfile;
 import com.game.companion.modules.companion.entity.CompanionSkill;
@@ -8,6 +9,7 @@ import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
 import com.game.companion.modules.companion.mapper.CompanionSkillMapper;
 import com.game.companion.modules.companion.service.CompanionService;
 import com.game.companion.modules.companion.vo.CompanionItemVO;
+import com.game.companion.modules.companion.vo.CompanionStatusVO;
 import com.game.companion.modules.companion.vo.CompanionWorkbenchVO;
 import com.game.companion.modules.order.entity.CompanionOrder;
 import com.game.companion.modules.order.mapper.CompanionOrderMapper;
@@ -137,6 +139,8 @@ public class CompanionServiceImpl implements CompanionService {
         if (profile == null) {
             throw new ApiException("当前用户尚未成为认证陪练师");
         }
+        // 【准入校验】仅提交了入驻申请（审核中/已驳回）不得进入接单工作台
+        assertAuditPassed(profile);
 
         // 2. 查询真实钱包
         UserWallet wallet = userWalletMapper.selectOne(
@@ -178,10 +182,56 @@ public class CompanionServiceImpl implements CompanionService {
         CompanionProfile profile = companionProfileMapper.selectOne(
                 new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, userId)
         );
-        if (profile != null) {
+        if (profile == null) {
+            throw new ApiException("当前用户尚未成为认证陪练师");
+        }
+        // 【准入校验】未通过入驻审核不得开启接单
+        assertAuditPassed(profile);
+        if (profile.getIsOnline() != null) {
             profile.setIsOnline(isOnline ? 1 : 0);
             companionProfileMapper.updateById(profile);
         }
+    }
+
+    /**
+     * 【准入校验】陪玩师必须通过入驻审核 (audit_status = 1) 才具备接单资格。
+     * 仅提交申请（待审核）或被驳回，一律不得进入接单工作台、不得开启接单开关。
+     */
+    private void assertAuditPassed(CompanionProfile profile) {
+        Integer auditStatus = profile.getAuditStatus();
+        if (auditStatus == null || auditStatus != 1) {
+            if (auditStatus != null && auditStatus == 2) {
+                String reason = profile.getRejectReason();
+                throw new ApiException("入驻申请未通过审核，无法进入接单工作台"
+                        + (reason != null && !reason.trim().isEmpty() ? "：" + reason.trim() : "，请修改资料后重新提交"));
+            }
+            throw new ApiException("入驻申请审核中，请等待管理员核验通过后再进入接单工作台");
+        }
+    }
+
+    @Override
+    public CompanionStatusVO getMyCompanionStatus(Long userId) {
+        SysUser user = sysUserMapper.selectById(userId);
+        int role = (user != null && user.getRole() != null) ? user.getRole() : RoleEnum.CLIENT.getCode();
+
+        CompanionProfile profile = companionProfileMapper.selectOne(
+                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, userId)
+        );
+
+        boolean hasProfile = profile != null;
+        int auditStatus = hasProfile && profile.getAuditStatus() != null ? profile.getAuditStatus() : 0;
+        // 平台管理员天然具备全部接单权限
+        boolean canAcceptOrder = role == RoleEnum.ADMIN.getCode() || (hasProfile && auditStatus == 1);
+
+        return CompanionStatusVO.builder()
+                .hasProfile(hasProfile)
+                .auditStatus(auditStatus)
+                .rejectReason(hasProfile ? profile.getRejectReason() : null)
+                .role(role)
+                .canAcceptOrder(canAcceptOrder)
+                .isOnline(hasProfile && profile.getIsOnline() != null ? profile.getIsOnline() : 0)
+                .realName(hasProfile ? profile.getRealName() : null)
+                .build();
     }
 
     /**

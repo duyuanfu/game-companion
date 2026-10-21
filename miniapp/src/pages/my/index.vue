@@ -3,7 +3,7 @@
     <!-- 用户个人信息卡片 (完全来自数据库真实数据) -->
     <view class="profile-card">
       <view class="avatar-wrap" @click="handleChangeAvatar">
-        <image class="avatar" :src="userInfo.avatarUrl || defaultAvatar" />
+        <image :key="avatarVersion" class="avatar" :src="userInfo.avatarUrl || defaultAvatar" />
         <view class="avatar-edit-badge">✎</view>
       </view>
       <view class="info-content">
@@ -51,10 +51,10 @@
       </view>
     </view>
 
-    <!-- 陪玩师进阶入口 (严格排他互斥：普通客户显示去申请，陪玩师及管理员直接展示工作台) -->
+    <!-- 陪玩师进阶入口 (严格按【真实入驻审核状态】分流，绝不出现「仅提交申请就能进工作台」) -->
     <view class="section-card companion-entry-card">
-      <!-- 场景 A：已是认证陪玩师 (role=2) 或 超级管理员 (role=9) -> 展示独立接单工作台 -->
-      <view v-if="userInfo.role === 2 || userInfo.role === 9" class="entry-row" @click="goToWorkbench">
+      <!-- 场景 A：审核通过 或 平台管理员 -> 展示独立接单工作台 -->
+      <view v-if="canEnterWorkbench" class="entry-row" @click="goToWorkbench">
         <view class="entry-left">
           <text class="entry-icon">💼</text>
           <view class="entry-text">
@@ -68,7 +68,31 @@
         <view class="entry-btn workbench">进入工作台 ›</view>
       </view>
 
-      <!-- 场景 B：普通客户 (role=1) -> 展示申请成为陪练师 -->
+      <!-- 场景 B：已提交申请但审核中 -> 明确告知审核进度，不可接单 -->
+      <view v-else-if="companionStatus.auditStatus === 0" class="entry-row entry-disabled" @click="showAuditPending">
+        <view class="entry-left">
+          <text class="entry-icon">⏳</text>
+          <view class="entry-text">
+            <text class="main-title">陪玩师资质审核中</text>
+            <text class="sub-title">管理员核验通过后才会开放接单工作台</text>
+          </view>
+        </view>
+        <view class="entry-btn disabled">审核中</view>
+      </view>
+
+      <!-- 场景 C：审核被驳回 -> 允许修改资料重新提交 -->
+      <view v-else-if="companionStatus.auditStatus === 2" class="entry-row" @click="goToApply">
+        <view class="entry-left">
+          <text class="entry-icon">⚠️</text>
+          <view class="entry-text">
+            <text class="main-title">陪玩师申请未通过</text>
+            <text class="sub-title">{{ companionStatus.rejectReason || '请修改资料后重新提交申请' }}</text>
+          </view>
+        </view>
+        <view class="entry-btn">重新申请 ›</view>
+      </view>
+
+      <!-- 场景 D：普通客户 (role=1) -> 展示申请成为陪练师 -->
       <view v-else class="entry-row" @click="goToApply">
         <view class="entry-left">
           <text class="entry-icon">🎙️</text>
@@ -170,9 +194,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getUserInfoApi, mockSwitchRoleApi, bindPhoneApi, updateProfileApi, type UserInfo } from '../../api/user';
+import { getMyCompanionStatusApi, type CompanionStatus } from '../../api/companion';
 import { execSilentLogin } from '../../utils/request';
 import { uploadFile } from '../../utils/upload';
 
@@ -194,6 +219,24 @@ const phoneModalTip = ref('请输入11位手机号码用于接单短信提醒');
 
 const showNicknameModal = ref(false);
 const inputNickname = ref('');
+
+/** 【准入】真实入驻审核状态（决定能否进入接单工作台） */
+const companionStatus = ref<CompanionStatus>({
+  hasProfile: false,
+  auditStatus: 0,
+  rejectReason: '',
+  role: 1,
+  canAcceptOrder: false,
+  isOnline: 0
+});
+
+/** 是否可进入接单工作台：审核通过 或 平台管理员 */
+const canEnterWorkbench = computed(() => companionStatus.value.canAcceptOrder === true);
+
+/** 头像刷新计数：微信 <image> 对同源 URL 有缓存，改头像后自增强制重建组件 */
+const avatarVersion = ref(0);
+/** 最近一次从服务端加载到的头像地址（用于判断是否需要强制刷新图片） */
+const lastLoadedAvatarUrl = ref('');
 
 function openPhoneModal(title = '绑定手机号', tip = '请输入11位手机号码用于接单短信提醒') {
   phoneModalTitle.value = title;
@@ -231,6 +274,10 @@ function handleChangeAvatar() {
     success: (res) => {
       const tempPath = res.tempFilePaths[0];
       if (!tempPath) return;
+      // 【乐观更新】先立刻用本地临时图占位，用户无需等待上传完成即可看到变化
+      userInfo.value = { ...userInfo.value, avatarUrl: tempPath };
+      avatarVersion.value += 1;
+
       uni.showLoading({ title: '正在上传头像...' });
       uploadFile(tempPath).then((avatarUrl) => {
         uni.hideLoading();
@@ -238,6 +285,8 @@ function handleChangeAvatar() {
       }).catch((err: any) => {
         uni.hideLoading();
         console.error('头像上传失败:', err);
+        // 上传失败则回滚到服务器上的真实头像
+        loadUserData();
         uni.showToast({ title: err?.message || '头像上传失败', icon: 'none' });
       });
     }
@@ -279,7 +328,11 @@ function saveProfile(payload: { nickname: string; avatarUrl?: string }) {
   updateProfileApi(payload).then((res) => {
     uni.hideLoading();
     if (res.data) {
-      userInfo.value = res.data;
+      // 【立即生效】直接用服务端返回的最新档案覆盖本地状态
+      userInfo.value = { ...res.data };
+      avatarVersion.value += 1;
+      // 同步到本地缓存，供首页/订单卡片等其它页面即时读取
+      uni.setStorageSync('currentUserInfo', userInfo.value);
     }
     uni.showToast({ title: '资料已更新！', icon: 'success' });
     loadUserData();
@@ -287,6 +340,27 @@ function saveProfile(payload: { nickname: string; avatarUrl?: string }) {
     uni.hideLoading();
     console.error('修改资料失败:', err);
     uni.showToast({ title: err?.message || '保存失败，请稍后重试', icon: 'none' });
+  });
+}
+
+/**
+ * 加载陪玩师入驻与接单资格状态
+ */
+function loadCompanionStatus() {
+  getMyCompanionStatusApi().then((res) => {
+    if (res.data) {
+      companionStatus.value = res.data;
+    }
+  }).catch(() => {
+    // 状态接口失败不阻断页面其它功能
+  });
+}
+
+function showAuditPending() {
+  uni.showModal({
+    title: '资质审核中',
+    content: '您的陪玩师入驻申请已提交，管理员核验通过后才会开放接单工作台与接单开关，请耐心等待~',
+    showCancel: false
   });
 }
 
@@ -318,7 +392,12 @@ function loadUserData() {
   const cachedUserId = uni.getStorageSync('currentUserId');
   getUserInfoApi().then(userRes => {
     if (userRes.data) {
-      userInfo.value = userRes.data;
+      userInfo.value = { ...userRes.data };
+      // 头像地址变化时自增强制刷新 <image>，规避微信图片缓存
+      if (userRes.data.avatarUrl !== lastLoadedAvatarUrl.value) {
+        lastLoadedAvatarUrl.value = userRes.data.avatarUrl || '';
+        avatarVersion.value += 1;
+      }
       if (userRes.data.id) {
         uni.setStorageSync('currentUserId', userRes.data.id);
       }
@@ -429,6 +508,7 @@ function contactService() {
 
 onMounted(() => {
   loadUserData();
+  loadCompanionStatus();
   // 监听全局静默登录完成广播，实时同步真实身份与角色
   uni.$on('user_login_success', (userData: any) => {
     if (userData) {
@@ -437,16 +517,20 @@ onMounted(() => {
       userInfo.value.avatarUrl = userData.avatarUrl;
       userInfo.value.phone = userData.phone;
       userInfo.value.role = userData.role;
+      avatarVersion.value += 1;
     }
+    loadCompanionStatus();
   });
 });
 
 onShow(() => {
   loadUserData();
+  loadCompanionStatus();
 });
 
 onPullDownRefresh(() => {
   loadUserData();
+  loadCompanionStatus();
   setTimeout(() => {
     uni.stopPullDownRefresh();
   }, 600);
@@ -620,6 +704,12 @@ onPullDownRefresh(() => {
 }
 .entry-btn.workbench {
   color: #10b981;
+}
+.entry-btn.disabled {
+  color: #9ca3af;
+}
+.entry-disabled {
+  opacity: 0.85;
 }
 .menu-item {
   display: flex;

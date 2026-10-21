@@ -910,4 +910,117 @@ public class OrderFlowIntegrationTest {
 
         System.out.println("✅ 自助改头像昵称与「陪练入驻录音选填」测试全部通过！");
     }
+
+    /**
+     * 【单元测试 15】陪玩师准入控制 + 订单状态分类筛选
+     */
+    @Test
+    @Order(15)
+    public void test15_CompanionAdmissionAndOrderStatusGrouping() {
+        System.out.println("\n========== [单元测试 15: 陪玩师准入控制 + 订单状态分类筛选测试] ==========");
+
+        // 1. 新建一个「刚提交申请、尚未审核通过」的陪玩师
+        WxLoginDTO applicantDto = new WxLoginDTO();
+        applicantDto.setCode("mock_code_simulator_applicant");
+        applicantDto.setDeviceType("simulator");
+        Long applicantId = userService.wxSilentLogin(applicantDto).getUserId();
+
+        var applyDTO = new com.game.companion.modules.companion.dto.ApplyCompanionDTO();
+        applyDTO.setRealName("待审核小李");
+        applyDTO.setPhone("13800000077");
+        applyDTO.setBio("刚提交申请");
+        var skill = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        skill.setGameName("王者荣耀");
+        skill.setRankName("钻石");
+        skill.setPrice(20);
+        skill.setPriceUnit("YUAN");
+        skill.setUnit("小时");
+        skill.setRankImg("https://images.unsplash.com/photo-1542751371-adc38448a05e");
+        applyDTO.setSkills(java.util.List.of(skill));
+        companionService.applyCompanion(applicantId, applyDTO);
+
+        // 2. 状态查询：审核中 -> 无接单资格
+        var status = companionService.getMyCompanionStatus(applicantId);
+        assertTrue(status.isHasProfile(), "已提交申请后必须存在陪玩师档案");
+        assertEquals(0, status.getAuditStatus(), "刚提交的申请必须是待审核(0)");
+        assertFalse(status.isCanAcceptOrder(), "审核未通过时绝不能具备接单资格！");
+
+        // 3. 【准入】审核中不得进入接单工作台
+        assertThrows(ApiException.class, () -> {
+            companionService.getWorkbenchStats(applicantId);
+        }, "审核中的陪玩师绝不允许进入接单工作台！");
+
+        // 4. 【准入】审核中不得开启接单开关
+        assertThrows(ApiException.class, () -> {
+            companionService.toggleOnlineStatus(applicantId, true);
+        }, "审核中的陪玩师绝不允许开启接单开关！");
+
+        // 5. 【准入】审核中不得接单
+        CreateOrderDTO orderDTO = new CreateOrderDTO();
+        orderDTO.setCompanionUserId(applicantId);
+        orderDTO.setSkillId(testSkillId);
+        orderDTO.setQuantity(1);
+        orderDTO.setGameServer("微信区");
+        orderDTO.setGameAccount("准入测试");
+        PaymentResultVO payResult = companionOrderService.createAndPayOrder(clientUserId, orderDTO);
+        String orderSn = payResult.getOrderSn();
+
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.acceptOrder(applicantId, orderSn);
+        }, "审核未通过的陪玩师绝不允许接单！");
+
+        // 6. 审核通过后即可正常接单
+        CompanionProfile applicantProfile = companionProfileMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CompanionProfile>()
+                        .eq(CompanionProfile::getUserId, applicantId)
+        );
+        applicantProfile.setAuditStatus(1);
+        companionProfileMapper.updateById(applicantProfile);
+
+        var approvedStatus = companionService.getMyCompanionStatus(applicantId);
+        assertTrue(approvedStatus.isCanAcceptOrder(), "审核通过后必须具备接单资格！");
+
+        companionOrderService.acceptOrder(applicantId, orderSn);
+        assertEquals(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode(),
+                companionOrderService.getOrderDetail(orderSn).getOrderStatus(),
+                "审核通过后接单必须成功流转为服务中(2)");
+
+        // 7. 【状态分类】-2 「已结束」分组必须同时覆盖 5/6/7/8
+        //    构造一个已退款(6)订单用于验证分组筛选
+        companionOrderService.applyFinish(applicantId, orderSn, "/uploads/x.png");
+        companionOrderService.confirmFinish(clientUserId, orderSn);
+        assertEquals(OrderStatusEnum.FINISHED.getCode(),
+                companionOrderService.getOrderDetail(orderSn).getOrderStatus());
+
+        Page<CompanionOrder> finishedGroup = companionOrderService.getMyOrders(clientUserId, "client", -2, 1, 100);
+        boolean containsCancelledOrRefunded = finishedGroup.getRecords().stream()
+                .anyMatch(o -> o.getOrderStatus() == 5 || o.getOrderStatus() == 6
+                        || o.getOrderStatus() == 7 || o.getOrderStatus() == 8);
+        assertTrue(containsCancelledOrRefunded,
+                "「已结束」分类必须能查到已取消/已退款/维权中/仲裁退款状态的订单！");
+
+        // 8. 「已结束」分组不得混入进行中的订单
+        boolean noOngoing = finishedGroup.getRecords().stream()
+                .noneMatch(o -> o.getOrderStatus() == 1 || o.getOrderStatus() == 2
+                        || o.getOrderStatus() == 3 || o.getOrderStatus() == 4);
+        assertTrue(noOngoing, "「已结束」分类绝不允许混入待接单/服务中/待确认/已完成的订单！");
+
+        // 9. 精确状态筛选仍必须可用
+        Page<CompanionOrder> finishedOnly = companionOrderService.getMyOrders(clientUserId, "client", 4, 1, 100);
+        assertTrue(finishedOnly.getRecords().stream().allMatch(o -> o.getOrderStatus() == 4),
+                "按状态 4 精确筛选必须只返回已完成的订单！");
+
+        // 10. 【数据可见性】客户不得看到平台内部清算数据；陪练师与管理��可以
+        CompanionOrder clientView = companionOrderService.getOrderDetailForViewer(orderSn, clientUserId, 1);
+        assertNull(clientView.getSettlement(), "客户视图绝不允许包含平台内部清算单数据！");
+        assertNull(clientView.getPlatformFee(), "客户视图绝不允许包含平台抽佣金额！");
+
+        CompanionOrder companionView = companionOrderService.getOrderDetailForViewer(orderSn, applicantId, 2);
+        assertNotNull(companionView.getSettlement(), "陪练师本人必须能看到自己的清算与收益数据！");
+
+        CompanionOrder adminView = companionOrderService.getOrderDetailForViewer(orderSn, clientUserId, 9);
+        assertNotNull(adminView.getSettlement(), "平台管理员必须能看到完整清算对账单！");
+
+        System.out.println("✅ 陪玩师准入控制与订单状态分类筛选测试全部通过！");
+    }
 }

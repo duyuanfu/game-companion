@@ -53,6 +53,11 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper, CompanionOrder> implements CompanionOrderService {
 
+    /**
+     * 【列表筛选】「已结束」分组：已取消(5) / 已退款(6) / 维权争议中(7) / 仲裁退款完成(8)
+     */
+    public static final int ORDER_STATUS_FINISHED_GROUP = -2;
+
     private final PaymentStrategyContext paymentStrategyContext;
     private final NoticeService noticeService;
     private final CompanionOrderMapper companionOrderMapper;
@@ -235,6 +240,19 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             if (!companionUserId.equals(order.getCompanionUserId())) {
                 throw new ApiException("非指定接单陪玩师，无法接单");
             }
+        }
+
+        // 【准入校验】必须已通过入驻审核才允许接单，防止「仅提交申请」就能抢单接单
+        CompanionProfile profile = companionProfileMapper.selectOne(
+                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, companionUserId)
+        );
+        if (profile == null) {
+            throw new ApiException("您还不是认证陪练师，请先提交入驻申请并等待审核通过");
+        }
+        if (profile.getAuditStatus() == null || profile.getAuditStatus() != 1) {
+            throw new ApiException(profile.getAuditStatus() != null && profile.getAuditStatus() == 2
+                    ? "入驻申请未通过审核，暂时无法接单"
+                    : "入驻申请审核中，暂时无法接单");
         }
 
         order.setOrderStatus(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode());
@@ -430,6 +448,21 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     }
 
     @Override
+    public CompanionOrder getOrderDetailForViewer(String orderSn, Long viewerUserId, int viewerRole) {
+        CompanionOrder order = getOrderDetail(orderSn);
+
+        // 【数据可见性】平台内部清算数据（毛抽佣/通道费/净利）仅陪玩师本人与管理员可见，
+        // 普通客户的订单详情中直接剥离，避免通过抓包即可窥探平台利润结构。
+        boolean canSeeSettlement = viewerRole == RoleEnum.ADMIN.getCode()
+                || (viewerUserId != null && viewerUserId.equals(order.getCompanionUserId()));
+        if (!canSeeSettlement) {
+            order.setSettlement(null);
+            order.setPlatformFee(null);
+        }
+        return order;
+    }
+
+    @Override
     public boolean canViewOrder(Long viewerUserId, int viewerRole, CompanionOrder order) {
         if (order == null) {
             return false;
@@ -456,8 +489,14 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             wrapper.eq(CompanionOrder::getClientUserId, userId);
         }
 
+        // 状态筛选语义：
+        //  -1 = 全部（不过滤）
+        //  -2 = 已结束（已取消5 / 已退款6 / 维权争议中7 / 仲裁退款完成8）
+        //  0~8 = 精确匹配单个状态
         if (orderStatus != null && orderStatus >= 0) {
             wrapper.eq(CompanionOrder::getOrderStatus, orderStatus);
+        } else if (orderStatus != null && orderStatus == ORDER_STATUS_FINISHED_GROUP) {
+            wrapper.in(CompanionOrder::getOrderStatus, 5, 6, 7, 8);
         }
 
         wrapper.orderByDesc(CompanionOrder::getCreateTime);

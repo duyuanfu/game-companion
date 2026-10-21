@@ -45,6 +45,14 @@ public class CompanionController {
         return CommonResult.success(companionService.getWorkbenchStats(targetUserId));
     }
 
+    @GetMapping("/my-status")
+    @Operation(summary = "【准入】查询当前登录用户的陪玩师入驻与接单资格状态")
+    public CommonResult<com.game.companion.modules.companion.vo.CompanionStatusVO> getMyStatus() {
+        // 身份只认当前登录会话
+        Long currentUserId = authGuard.currentUserId();
+        return CommonResult.success(companionService.getMyCompanionStatus(currentUserId));
+    }
+
     @PostMapping("/toggle-online")
     @Operation(summary = "【陪玩师工作台】切换真实接单状态")
     public CommonResult<String> toggleOnline(@RequestParam boolean isOnline) {

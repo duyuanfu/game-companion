@@ -67,9 +67,26 @@
       </view>
     </view>
 
-    <!-- 订单分佣清算事实卡片 (解耦自 order_settlement 表，完结后展示) -->
-    <view class="section-card settlement-card" v-if="order.settlement">
-      <view class="card-title">🧾 订单分佣清算对账单 (官方结算)</view>
+    <!-- 陪练师收益到账卡片：只展示「自己的钱」，不暴露平台内部财务数据 -->
+    <view class="section-card settlement-card" v-if="order.settlement && isCompanion">
+      <view class="card-title">💰 本单收益已到账</view>
+      <view class="row">
+        <text class="lbl">清算单号：</text>
+        <text class="val code-sn">{{ order.settlement.settleSn }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">我的收益：</text>
+        <text class="val price">¥{{ ((order.settlement.companionIncome || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">到账状态：</text>
+        <text class="val">已划入我的钱包，可在工作台申请提现</text>
+      </view>
+    </view>
+
+    <!-- 平台内部清算对账单：仅平台管理员可见（客户与陪练师均不可见） -->
+    <view class="section-card settlement-card" v-if="order.settlement && isAdminView">
+      <view class="card-title">🧾 订单分佣清算对账单 (平台内部)</view>
       <view class="row">
         <text class="lbl">清算单号：</text>
         <text class="val code-sn">{{ order.settlement.settleSn }}</text>
@@ -246,6 +263,7 @@
 import { ref, computed } from 'vue';
 import { onLoad, onShow, onHide, onUnload, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getOrderDetailApi, applyFinishOrderApi, confirmOrderApi, acceptOrderApi, cancelOrderApi, autoRefundTimeoutApi, submitReviewApi, getReviewDetailApi, applyDisputeApi } from '../../api/order';
+import { getUserInfoApi } from '../../api/user';
 import { silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const order = ref<any>({
@@ -274,6 +292,10 @@ const isClient = computed(() => {
 const isCompanion = computed(() => {
   return order.value.companionUserId === currentUserId.value;
 });
+
+/** 当前查看者角色（1-客户 2-陪玩师 9-管理员），用于控制平台内部数据可见性 */
+const viewerRole = ref(1);
+const isAdminView = computed(() => viewerRole.value === 9);
 
 const reviewScore = ref(5);
 const isReviewed = ref(false);
@@ -471,7 +493,19 @@ function stopStatusPolling() {
   }
 }
 
+/**
+ * 加载当前查看者角色：用于控制「平台内部清算数据」的可见性
+ */
+function loadViewerRole() {
+  getUserInfoApi().then((res) => {
+    if (res.data) {
+      viewerRole.value = res.data.role || 1;
+    }
+  }).catch(() => {});
+}
+
 onLoad((options: any) => {
+  loadViewerRole();
   if (options.orderSn) {
     order.value.orderSn = options.orderSn;
     loadOrderDetail(options.orderSn);
@@ -479,6 +513,7 @@ onLoad((options: any) => {
 });
 
 onShow(() => {
+  loadViewerRole();
   if (order.value.orderSn) {
     loadOrderDetail(order.value.orderSn);
   }

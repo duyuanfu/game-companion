@@ -45,7 +45,9 @@ public class CompanionOrderController {
         if (!companionOrderService.canViewOrder(currentUserId, currentRole, order)) {
             throw new ApiException(ResultCode.FORBIDDEN);
         }
-        return CommonResult.success(order);
+        // 按查看者身份裁剪平台内部财务数据（客户不可见清算明细）
+        return CommonResult.success(
+                companionOrderService.getOrderDetailForViewer(orderSn, currentUserId, currentRole));
     }
 
     @GetMapping("/my-list")

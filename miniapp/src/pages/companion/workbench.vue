@@ -143,6 +143,18 @@ function loadStats() {
     }
   }).catch(err => {
     console.error('获取工作台统计失败:', err);
+    // 【准入】后端会明确返回「审核中/未通过」的错误，这里给出用户可理解的提示并阻止继续操作
+    const msg = (err && err.message) ? err.message : '';
+    if (msg.includes('审核') || msg.includes('陪练师')) {
+      uni.showModal({
+        title: '暂未开放接单工作台',
+        content: msg,
+        showCancel: false,
+        success: () => {
+          uni.switchTab({ url: '/pages/my/index' });
+        }
+      });
+    }
   });
 
   getMyOrdersApi({

@@ -54,6 +54,14 @@ public interface CompanionOrderService extends IService<CompanionOrder> {
     CompanionOrder getOrderDetail(String orderSn);
 
     /**
+     * 【带查看者身份】查询订单详情。
+     *
+     * <p>平台内部财务数据（毛抽佣 / 微信通道费 / 平台净利）属于商业机密，
+     * 仅陪玩师本人与平台管理员可见；普通客户拿到的订单详情中不包含清算单数据。</p>
+     */
+    CompanionOrder getOrderDetailForViewer(String orderSn, Long viewerUserId, int viewerRole);
+
+    /**
      * 分页查询我的订单列表 (按下单客户 client 或 陪玩师 companion 查询)
      */
     Page<CompanionOrder> getMyOrders(Long userId, String roleType, Integer orderStatus, int pageNum, int pageSize);
