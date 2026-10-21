@@ -16,6 +16,7 @@
 - [九、 平台安全与鉴权模型（默认拒绝）](#九-平台安全与鉴权模型默认拒绝)
 - [十、 自动化运维：订单超时调度](#十-自动化运维订单超时调度)
 - [十一、 敏感配置与密钥治理](#十一-敏感配置与密钥治理)
+- [十二、 上线前必做清单（Deployment Checklist）](#十二-上线前必做清单deployment-checklist)
 
 ---
 
@@ -212,8 +213,12 @@ $$
 4. 在“我的模板”中复制生成的 **模板ID (`Template ID`)**。
 
 ### 2. 激活真实推送配置
-将复制的模板 ID 填入后端的 `server/src/main/resources/application.yml` 或在管理员手机端热配置中心直接填写：
+> 推荐在**管理员手机端热配置中心**填写（秒级生效，无需重启服务）：
+> 小程序「我的 → 连击 5 次管理员暗门 → 支付与配置 → 新订单模板ID」。
+
+也可通过本地私有配置 `server/src/main/resources/application-local.yml`（已 gitignore）或环境变量注入：
 ```yaml
+# application-local.yml（推荐，不会进入版本库）
 wx:
   miniapp:
     appid: "你的微信小程序真实AppID"
@@ -221,6 +226,12 @@ wx:
     template-id:
       new-order: "你的新订单提醒模板ID"
 ```
+```powershell
+# 或使用环境变量
+$env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
+```
+> ⚠️ 模板 ID 与 AppSecret 请勿写入 `application.yml`（该文件会进入版本库），详见 [第十一章 敏感配置与密钥治理](#十一-敏感配置与密钥治理)。
+
 
 ---
 
@@ -344,11 +355,7 @@ $env:WX_PAY_API_V3_KEY  = "...."
 $env:SPRING_PROFILES_ACTIVE = "prod"
 ```
 
-### 4. 密钥轮换提醒
-> ⚠️ 仓库历史提交中曾出现过明文 AppID / AppSecret。**正式上线前请务必在微信公众平台重置小程序 AppSecret**，
-> 并同步更新 `application-local.yml` 或环境变量。
-
-### 5. 微信支付 V3 真实可用性
+### 4. 微信支付 V3 真实可用性
 `WechatV3PaymentServiceImpl` 已实现 **JSAPI 下单 / 原路退款 / 商家转账到零钱** 三项生产能力，并新增 `/pay/notify` 异步回调网关。
 与早期「静默返回成功」的空壳实现不同：**商户参数缺失、验签失败、退款被拒一律抛出明确异常，绝不伪造成功**。
 
@@ -358,4 +365,118 @@ $env:SPRING_PROFILES_ACTIVE = "prod"
 | 原路退款 | `refundV3`，退款额与原单额一并上送 | 微信非 SUCCESS/PROCESSING 即抛异常，**订单不会标记为已退款** |
 | 商家转账到零钱 | `MerchantTransferService.createTransfer`，返回微信批次单号 | 抛异常，冻结资金保持冻结待重试 |
 | 支付异步回调 | 官方 RSA 验签 + AES-GCM 解密 | 验签失败直接拒绝，**绝不落盘支付事实** |
+
+---
+
+## 十二、 上线前必做清单（Deployment Checklist）
+
+> 本章是**上线前的强制动作项**，逐条完成并勾选后方可对外运营。
+> 涉及资金与账号安全，**任何一条遗漏都可能导致资损、漏单或封号**。
+
+### ☐ 1. 密钥轮换（最高优先级，必做）
+
+> ⚠️ 仓库历史提交 `5da4019`（`feat: initial commit`）中曾出现过**明文 AppID / AppSecret / 订阅消息模板 ID**。
+> 虽然当前代码已全部改为环境变量占位符，但**密钥本身已经泄漏在 Git 历史中**，
+> 只要不重置，就等同于把小程序后台的钥匙挂在公网上。
+
+**操作步骤：**
+
+1. 登录 [微信公众平台](https://mp.weixin.qq.com/) → **开发管理 → 开发设置 → AppSecret**
+2. 点击 **「重置」**，系统会生成一个全新的 AppSecret（旧 Secret 立即失效）
+3. 同步更新本地私有配置（该文件已被 `.gitignore` 忽略，不会进入版本库）：
+   ```yaml
+   # server/src/main/resources/application-local.yml
+   wx:
+     miniapp:
+       appid: "wx........"
+       secret: "【重置后的新 Secret】"
+   ```
+   或注入环境变量：
+   ```powershell
+   $env:WX_MINIAPP_SECRET = "【重置后的新 Secret】"
+   ```
+4. 重启后端，确认日志出现 `✅ [WxMaService] 微信官方小程序服务引擎已成功加载！` 且**不再有** `微信官方 API 换取 session 失败` 的报错
+5. 真机重新走一遍「静默登录 → 绑定手机号 → 下单 → 收到派单通知」全链路，确认 OpenID 正常下发
+
+**顺带建议（可选但推荐）：**
+* 若该仓库是公开仓库或曾推送到第三方 Git 服务，建议在 GitHub 仓库设置中启用 **「推送保护 / Push Protection」**，并在仓库中提示后来者**不要使用历史密钥**
+* 若有条件，可对历史提交做一次 `git filter-repo` 清理（**注意：会重写提交历史，需团队协商后执行**）
+* 订阅消息模板 ID 虽非严格意义上的密钥，但同样建议在热配置中心重新确认
+
+### ☐ 2. 配置微信支付异步回调地址 `/pay/notify`
+
+> 真实支付模式下，微信支付成功后会向该地址推送**加密的支付结果通知**。
+> **未配置该地址 = 真实模式下永远不会产生 `pay_flow` 支付事实流水**，
+> 表现为「用户已付款，但订单一直卡在待付款、陪练收不到派单通知」。
+
+**配置方式（二选一，推荐方式 A）：**
+
+| 方式 | 操作 | 说明 |
+| :--- | :--- | :--- |
+| **A. 环境变量**（推荐） | `WX_PAY_NOTIFY_URL=https://你的域名/api/pay/notify` | 部署期固定，不受数据库误操作影响 |
+| B. 管理员热配置中心 | 小程序「我的 → 连击 5 次管理员暗门 → 支付与配置」填入 | 运营期可改，误操作会立即生效 |
+
+**完整上线步骤：**
+
+1. 准备一个**已备案、已配置 HTTPS** 的正式域名（例如 `https://api.你的域名.com`）
+2. 微信公众平台 → **开发管理 → 开发设置 → 服务器域名 → request 合法域名**，加入你的域名
+3. 设置环境变量：
+   ```powershell
+   $env:WX_PAY_NOTIFY_URL = "https://api.你的域名.com/api/pay/notify"
+   ```
+4. 微信支付商户平台（[pay.weixin.qq.com](https://pay.weixin.qq.com/)）→ **产品中心 → JSAPI 支付 → 支付配置 → 支付回调地址**，填入同一地址
+   > ⚠️ 此处与 `WX_PAY_NOTIFY_URL` **必须是完全一致的地址**，否则微信回调会被拒
+5. 同步补齐其余商户参数：
+   ```yaml
+   # application-local.yml 或环境变量
+   wx:
+     pay:
+       mchId: "商户号"
+       apiV3Key: "APIv3 密钥（32位）"
+       keyPath: "classpath:cert/apiclient_key.pem"   # 或改用热配置中心填入私钥 PEM 文本
+       certPath: "classpath:cert/apiclient_cert.pem"
+       notify-url: "https://api.你的域名.com/api/pay/notify"
+       transfer-scene-id: "【商家转账到零钱】经营场景ID"
+   ```
+6. 补齐**商户私钥与证书**：`server/src/main/resources/cert/` 目录下放入
+   `apiclient_key.pem`（商户 API 私钥）、`apiclient_cert.pem`（商户证书），
+   并在商户平台下载对应的**证书序列号**填入热配置中心
+7. 在小程序「管理员暗门 → 支付与配置」中把 **支付模式** 从 `mock` 切换为 **`wechat`**
+8. **端到端验证（必做）**：
+   * 下单 → 前端应拉起真实 `wx.requestPayment` 支付面板
+   * 支付完成后查库：`pay_flow` 应新增一条 `pay_status = 1` 的记录，`channel_fee` 为 0.6% 通道费
+   * `companion_order.order_status` 应流转为 **1（已付款待接单）**
+   * 陪练师应收到微信服务通知卡片
+
+### ☐ 3. 补齐订阅消息模板 ID
+
+微信订阅消息的模板 ID **不写在代码里**，统一在管理员热配置中心配置：
+
+1. 微信公众平台 → **功能 → 订阅消息 → 公共模板库** → 搜索添加「新订单提醒」/「待接单提醒」
+2. 复制生成的 **Template ID**
+3. 小程序「我的 → 连击 5 次管理员暗门 → 支付与配置」→ 填入 **新订单模板ID** → 保存（秒级生效）
+4. 验证：陪练师在工作台开启接单时授权订阅 → 客户下单 → 陪练师微信收到「服务通知」卡片
+
+### ☐ 4. 关闭开发期特权开关
+
+生产环境**必须**确保：
+
+```yaml
+# application.yml（默认值即为 false，dev profile 会覆盖为 true）
+platform:
+  dev-tools-enabled: false
+```
+
+* 确认生产 profile **不是** `dev`
+* 验证：`/user/mock-switch-role`、`/order/mock-pay/{sn}`、`/user/debug/all`、`/order/debug/list` 全部返回 403
+
+### ☐ 5. 其余上线动作（沿用既有指引）
+
+* 申请个体工商户营业执照（经营范围含「信息技术咨询服务」，**严禁出现代练/代打**）
+* 微信小程序选择 `生活服务 - 商务服务` 类目，完成工信部 12381 短信核验
+* 开通用户隐私保护指引（麦克风 / 录音信息）
+* 开通微信支付商户号 + 「商家转账到零钱」权限
+* 设置 `platform.commission-rate`（建议 **3%~5%**，切勿 0% 免佣，微信 0.6% 通道费会倒贴）
+* 首次上线前执行一次 `mvn test -Dtest=OrderFlowIntegrationTest` 确认核心链路无回归
+
 
