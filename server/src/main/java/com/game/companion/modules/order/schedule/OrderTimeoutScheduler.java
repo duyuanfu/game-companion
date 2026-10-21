@@ -43,6 +43,9 @@ public class OrderTimeoutScheduler {
     @Value("${platform.order-accept-timeout-minutes:10}")
     private int acceptTimeoutMinutes;
 
+    @Value("${platform.order-service-timeout-minutes:60}")
+    private int serviceTimeoutMinutes;
+
     @Value("${platform.order-finish-timeout-hours:24}")
     private int finishTimeoutHours;
 
@@ -53,13 +56,45 @@ public class OrderTimeoutScheduler {
     public void scanTimeoutOrders() {
         try {
             int refunded = refundAcceptTimeoutOrders();
+            int serviceRefunded = refundServiceTimeoutOrders();
             int settled = settleFinishTimeoutOrders();
-            if (refunded > 0 || settled > 0) {
-                log.info("【超时调度扫描完成】自动退款 {} 单，自动结单 {} 单", refunded, settled);
+            if (refunded > 0 || serviceRefunded > 0 || settled > 0) {
+                log.info("【超时调度扫描完成】接单超时退款 {} 单，履约超时退款 {} 单，完结超时自动结单 {} 单",
+                        refunded, serviceRefunded, settled);
             }
         } catch (Exception e) {
             log.error("【超时调度扫描异常】", e);
         }
+    }
+
+    /**
+     * 处理陪玩师接单后履约超时的订单：自动为客户全额原路退款。
+     *
+     * <p>刻意不加类级事务：每一笔退款由 service 层各自开启独立事务，
+     * 避免单笔失败导致整批回滚。</p>
+     */
+    public int refundServiceTimeoutOrders() {
+        LocalDateTime deadline = LocalDateTime.now().minusMinutes(serviceTimeoutMinutes);
+        List<CompanionOrder> timeoutOrders = companionOrderMapper.selectList(
+                new LambdaQueryWrapper<CompanionOrder>()
+                        .eq(CompanionOrder::getOrderStatus, 2) // 2-服务中
+                        .isNotNull(CompanionOrder::getAcceptTime)
+                        .lt(CompanionOrder::getAcceptTime, deadline)
+                        .orderByAsc(CompanionOrder::getAcceptTime)
+                        .last("LIMIT " + BATCH_LIMIT)
+        );
+
+        int count = 0;
+        for (CompanionOrder order : timeoutOrders) {
+            try {
+                if (companionOrderService.checkAndRefundIfServiceTimeout(order.getOrderSn())) {
+                    count++;
+                }
+            } catch (Exception e) {
+                log.error("【履约超时自动退款失败】订单号={}: {}", order.getOrderSn(), e.getMessage());
+            }
+        }
+        return count;
     }
 
     /**

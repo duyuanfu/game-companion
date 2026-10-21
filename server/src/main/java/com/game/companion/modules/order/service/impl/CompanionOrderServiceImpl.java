@@ -101,6 +101,12 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     @Value("${platform.order-accept-timeout-minutes:10}")
     private int acceptTimeoutMinutes;
 
+    /**
+     * 陪玩师接单后的履约时长上限 (分钟)。超时未完成服务，系统自动为客户全额原路退款。
+     */
+    @Value("${platform.order-service-timeout-minutes:60}")
+    private int serviceTimeoutMinutes;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto) {
@@ -510,8 +516,40 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
         // 动态装配预计/实际收益 (解决待接单时显示0.00的问题)
         fillEstimatedIncome(order);
+        // 动态装配当前阶段倒计时 (服务端按绝对截止时间计算, 前端每次进入都不会重置)
+        fillRemainingSeconds(order);
 
         return order;
+    }
+
+    /**
+     * 【倒计时】按订单的**绝对截止时间**计算当前阶段剩余秒数。
+     *
+     * <p>状态 1（待接单）：下单时间 + 接单超时阈值 → 超过未接单自动全额退款</p>
+     * <p>状态 2（服务中）：接单时间 + 履约超时阈值 → 超过未完成服务自动全额退款</p>
+     * <p>状态 3（待客户确认）：接单时间 + 履约超时阈值 → 超过由系统自动结单</p>
+     */
+    private void fillRemainingSeconds(CompanionOrder order) {
+        if (order == null || order.getOrderStatus() == null) {
+            return;
+        }
+        LocalDateTime deadline = null;
+        if (order.getOrderStatus() == OrderStatusEnum.PAID_WAIT_ACCEPT.getCode()) {
+            if (order.getCreateTime() != null) {
+                deadline = order.getCreateTime().plusMinutes(acceptTimeoutMinutes);
+            }
+        } else if (order.getOrderStatus() == OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode()
+                || order.getOrderStatus() == OrderStatusEnum.APPLIED_FINISH.getCode()) {
+            if (order.getAcceptTime() != null) {
+                deadline = order.getAcceptTime().plusMinutes(serviceTimeoutMinutes);
+            }
+        }
+        if (deadline == null) {
+            return;
+        }
+        order.setDeadlineTime(deadline);
+        long seconds = java.time.Duration.between(LocalDateTime.now(), deadline).getSeconds();
+        order.setRemainingSeconds((int) Math.max(0, Math.min(seconds, Integer.MAX_VALUE)));
     }
 
     @Override
@@ -569,7 +607,10 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         wrapper.orderByDesc(CompanionOrder::getCreateTime);
         Page<CompanionOrder> resPage = page(page, wrapper);
         if (resPage.getRecords() != null) {
-            resPage.getRecords().forEach(this::fillEstimatedIncome);
+            resPage.getRecords().forEach(o -> {
+                fillEstimatedIncome(o);
+                fillRemainingSeconds(o);
+            });
         }
         return resPage;
     }
@@ -663,6 +704,63 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         // 触发自动原路退款
         cancelAndRefundOrder(order.getClientUserId(), orderSn);
         log.info("【接单超时自动退款触发】订单[{}]陪练师超时未接单，已自动为客户[{}]原路退款并冲正流水！", orderSn, order.getClientUserId());
+        return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean checkAndRefundIfServiceTimeout(String orderSn) {
+        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
+        if (order == null) return false;
+
+        // 只有服务中(2)才需要判定履约超时
+        if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode()) {
+            return false;
+        }
+
+        LocalDateTime deadline = order.getAcceptTime() == null
+                ? null
+                : order.getAcceptTime().plusMinutes(serviceTimeoutMinutes);
+        if (deadline == null || LocalDateTime.now().isBefore(deadline)) {
+            return false;
+        }
+
+        // 触发自动原路退款（服务超时，与客户主动撤单走同一套资金冲正逻辑）
+        PaymentService paymentService = paymentStrategyContext.getService();
+        boolean refundSuccess = paymentService.refund(orderSn, order.getTotalAmount(), order.getTotalAmount(),
+                "陪玩师接单后 " + serviceTimeoutMinutes + " 分钟未完成服务，系统自动全额退款");
+        if (!refundSuccess) {
+            throw new ApiException("服务超时自动退款调用支付网关失败");
+        }
+
+        order.setOrderStatus(OrderStatusEnum.REFUNDED.getCode()); // 6 已退款
+        order.setUpdateTime(LocalDateTime.now());
+        updateById(order);
+
+        // 冲正支付事实流水
+        PayFlow payFlow = payFlowMapper.selectOne(
+                new LambdaQueryWrapper<PayFlow>().eq(PayFlow::getOrderSn, orderSn)
+        );
+        if (payFlow != null) {
+            payFlow.setPayStatus(3);
+            payFlow.setRefundAmount(order.getTotalAmount());
+            payFlow.setRefundChannelFee(payFlow.getChannelFee());
+            payFlow.setUpdateTime(LocalDateTime.now());
+            payFlowMapper.updateById(payFlow);
+        }
+
+        // 聊天室内同步系统提示，避免双方信息不对称
+        ChatMessage sysMsg = new ChatMessage();
+        sysMsg.setOrderSn(orderSn);
+        sysMsg.setSenderId(0L);
+        sysMsg.setSenderName("系统提示");
+        sysMsg.setSenderAvatar("https://img.icons8.com/color/96/shield.png");
+        sysMsg.setContent("⏰ 陪玩师接单后超过 " + serviceTimeoutMinutes + " 分钟仍未完成服务，系统已为客户全额原路退款，本单已结束。");
+        sysMsg.setCreateTime(LocalDateTime.now());
+        chatMessageMapper.insert(sysMsg);
+
+        log.info("【服务超时自动退款触发】订单[{}]陪玩师接单后超时未完成服务，已自动为客户[{}]全额退款！",
+                orderSn, order.getClientUserId());
         return true;
     }
 

@@ -28,6 +28,10 @@
           <view :class="['online-tag', item.isOnline ? 'online' : 'offline']">
             {{ item.isOnline ? '在线接单' : '休息中' }}
           </view>
+          <!-- 服务中状态：该陪玩师当前有进行中的订单 -->
+          <view v-if="item.isServing" class="serving-tag">
+            {{ item.servingStatusText }} {{ item.servingRemainText }}
+          </view>
         </view>
 
         <view class="card-right">
@@ -236,6 +240,20 @@ onMounted(() => {
 .online-tag.offline {
   background: #9ca3af;
   color: #ffffff;
+}
+/* 服务中状态标签（该陪玩师当前有进行中的订单） */
+.serving-tag {
+  position: absolute;
+  bottom: -40rpx;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 19rpx;
+  padding: 2rpx 10rpx;
+  border-radius: 10rpx;
+  white-space: nowrap;
+  background: #f59e0b;
+  color: #ffffff;
+  box-shadow: 0 2rpx 6rpx rgba(245, 158, 11, 0.35);
 }
 .card-right {
   flex: 1;

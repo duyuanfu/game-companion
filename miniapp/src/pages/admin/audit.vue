@@ -102,8 +102,9 @@
         </view>
 
         <view class="po-btns">
-          <button class="po-copy-btn" @click="handleCopyPhone(item)">📞 复制陪玩师电话</button>
-          <button class="po-copy-btn secondary" @click="handleCopyOrderSn(item)">复制订单号</button>
+          <button class="po-copy-btn primary" @click.stop="handleCallCompanion(item)">📞 拨打陪玩师</button>
+          <button class="po-copy-btn" @click.stop="handleCopyPhone(item)">复制电话</button>
+          <button class="po-copy-btn secondary" @click.stop="handleCopyOrderSn(item)">复制订单号</button>
         </view>
       </view>
     </view>
@@ -468,29 +469,78 @@ function switchAuditTab(tab: 'companion' | 'withdraw' | 'order' | 'notice' | 'co
 }
 
 /**
- * 复制陪玩师手机号，方便直接拨打
+ * 一键拨打陪玩师电话
+ *
+ * <p>管理员的真实诉求是「立刻打电话催接单」，因此优先使用微信原生拨号能力
+ * {@code wx.makePhoneCall}；在不支持的环境下自动降级为复制号码。</p>
+ */
+function handleCallCompanion(item: AdminOrderItem) {
+  if (!item.companionPhone) {
+    uni.showToast({ title: '该陪玩师未绑定手机号，无法拨打', icon: 'none' });
+    return;
+  }
+  const phone = item.companionPhone;
+  // #ifdef MP-WEIXIN
+  wx.makePhoneCall({
+    phoneNumber: phone,
+    fail: () => {
+      // 拨号被拒（如用户取消）时仍把号码复制出来，便于手动拨打
+      copyToClipboard(phone, `已复制 ${item.companionName || '陪玩师'} 的电话`);
+    }
+  });
+  // #endif
+
+  // #ifndef MP-WEIXIN
+  copyToClipboard(phone, `已复制 ${item.companionName || '陪玩师'} 的电话`);
+  // #endif
+}
+
+/**
+ * 复制陪玩师手机号
  */
 function handleCopyPhone(item: AdminOrderItem) {
   if (!item.companionPhone) {
     uni.showToast({ title: '该陪玩师未绑定手机号', icon: 'none' });
     return;
   }
-  uni.setClipboardData({
-    data: item.companionPhone,
-    success: () => {
-      uni.showToast({ title: `已复制 ${item.companionName || '陪玩师'} 的电话`, icon: 'none' });
-    }
-  });
+  copyToClipboard(item.companionPhone, `已复制 ${item.companionName || '陪玩师'} 的电话`);
 }
 
 /**
  * 复制订单号
  */
 function handleCopyOrderSn(item: AdminOrderItem) {
+  copyToClipboard(item.orderSn, '订单号已复制');
+}
+
+/**
+ * 统一复制实现
+ *
+ * <p>用「模态弹窗」而非 Toast 反馈，确保管理员能明确看到复制结果
+ * （小程序系统 Toast 极短，容易被忽略，导致「点了没反应」的错觉）。</p>
+ */
+function copyToClipboard(data: string, successMsg: string) {
+  if (!data) {
+    uni.showToast({ title: '没有可复制的内容', icon: 'none' });
+    return;
+  }
   uni.setClipboardData({
-    data: item.orderSn,
+    data: data,
     success: () => {
-      uni.showToast({ title: '订单号已复制', icon: 'none' });
+      uni.showModal({
+        title: '✅ 复制成功',
+        content: `${successMsg}\n\n${data}`,
+        showCancel: false,
+        confirmText: '知道了'
+      });
+    },
+    fail: (err: any) => {
+      console.error('复制失败:', err);
+      uni.showModal({
+        title: '复制失败',
+        content: `请长按文本手动复制：\n${data}`,
+        showCancel: false
+      });
     }
   });
 }
@@ -876,16 +926,21 @@ onPullDownRefresh(() => {
 }
 .po-copy-btn {
   flex: 1;
-  background: #6366f1;
-  color: #ffffff;
-  font-size: 25rpx;
-  border-radius: 30rpx;
-  line-height: 2.2;
-  margin-right: 16rpx;
-}
-.po-copy-btn.secondary {
   background: #eef2ff;
   color: #4f46e5;
+  font-size: 24rpx;
+  border-radius: 30rpx;
+  line-height: 2.2;
+  margin-right: 12rpx;
+  padding: 0 8rpx;
+}
+.po-copy-btn.primary {
+  background: #6366f1;
+  color: #ffffff;
+}
+.po-copy-btn.secondary {
+  background: #f3f4f6;
+  color: #6b7280;
   margin-right: 0;
 }
 .applicant-row {

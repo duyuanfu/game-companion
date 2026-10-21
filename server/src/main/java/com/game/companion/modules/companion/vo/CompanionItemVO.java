@@ -38,6 +38,15 @@ public class CompanionItemVO {
     @Schema(description = "是否在线接单中")
     private Boolean isOnline;
 
+    @Schema(description = "是否有正在进行中的订单（服务中/待确认），用于卡片状态展示")
+    private Boolean isServing;
+
+    @Schema(description = "当前进行中订单的状态文案：服务中 / 待客户确认，无进行中订单时为空")
+    private String servingStatusText;
+
+    @Schema(description = "当前进行中订单的剩余时间文案（如 12:30），无进行中订单时为空")
+    private String servingRemainText;
+
     @Schema(description = "声音试听时长(秒)")
     private Integer voiceDuration;
 

@@ -83,6 +83,8 @@ platform:
   channel-fee-rate: ${PLATFORM_CHANNEL_FEE_RATE:0.006}
   # 指定单超时未接单自动退款阈值 (分钟)
   order-accept-timeout-minutes: ${PLATFORM_ACCEPT_TIMEOUT_MINUTES:10}
+  # 陪玩师接单后的履约时长上限 (分钟): 超过未完成服务, 系统自动为客户全额退款
+  order-service-timeout-minutes: ${PLATFORM_SERVICE_TIMEOUT_MINUTES:60}
   # 陪玩师申请完结后，客户超时自动结单时间 (小时)
   order-finish-timeout-hours: ${PLATFORM_FINISH_TIMEOUT_HOURS:24}
   # 超时订单调度扫描间隔 (毫秒)

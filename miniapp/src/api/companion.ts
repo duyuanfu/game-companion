@@ -11,6 +11,12 @@ export interface CompanionItem {
   unit: string;
   skillId: number;
   isOnline: boolean;
+  /** 是否有进行中的订单（服务中/待客户确认） */
+  isServing?: boolean;
+  /** 进行中订单的状态文案 */
+  servingStatusText?: string;
+  /** 进行中订单的剩余时间文案 */
+  servingRemainText?: string;
   voiceDuration: number;
   voiceUrl: string;
   rating: number;

@@ -108,4 +108,12 @@ public class CompanionOrder implements Serializable {
     @com.baomidou.mybatisplus.annotation.TableField(exist = false)
     @Schema(description = "预计/实际平台毛抽佣 (分，动态聚合供前端无缝展示)")
     private Integer platformFee;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "当前阶段剩余倒计时秒数（待接单=距超时退款；服务中=距履约超时退款）。由服务端按绝对截止时间计算，前端直接展示不会重置")
+    private Integer remainingSeconds;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "当前阶段截止时间")
+    private java.time.LocalDateTime deadlineTime;
 }

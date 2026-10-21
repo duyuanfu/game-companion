@@ -160,7 +160,7 @@
       <!-- 客户态-待接单状态 -->
       <view v-if="order.orderStatus === 1" class="section-card tip-panel">
         <view class="countdown-row">
-          <text class="tip-title">⏳ 正在等待陪玩师接单</text>
+          <text class="tip-title">{{ countdownTitle }}</text>
           <text class="countdown-badge">{{ countdownText }}</text>
         </view>
         <text class="tip-desc">系统已通过站内提醒与平台人工通知告知对方，10分钟未接单系统将自动为您全额原路退款！您也可随时主动撤回。</text>
@@ -171,7 +171,10 @@
 
       <!-- 客户态-服务中，支持发起维权争议 -->
       <view v-if="order.orderStatus === 2" class="section-card tip-panel">
-        <text class="tip-title">🎮 正在开黑服务中</text>
+        <view class="countdown-row">
+          <text class="tip-title">{{ countdownTitle }}</text>
+          <text class="countdown-badge">{{ countdownText }}</text>
+        </view>
         <text class="tip-desc">双方已解锁开黑房间，正在尽情开黑中！如遇陪练失联等问题可申请维权。</text>
         <button class="dispute-btn" @click="handleApplyDispute">
           遇到问题？申请平台售后维权
@@ -245,6 +248,11 @@
       <!-- 陪玩态-新订单待接单 -->
       <view v-if="order.orderStatus === 1" class="section-card action-panel companion-accept">
         <view class="card-title">收到新的指定预约订单</view>
+        <view class="countdown-row">
+          <text class="tip-title">⏳ 请尽快接单</text>
+          <text class="countdown-badge">{{ countdownText }}</text>
+        </view>
+        <text class="tip-desc">超时未接单，系统将自动为客户全额原路退款。</text>
         <button class="accept-btn" @click="handleAcceptOrder">
           陪玩师立即确认接单 (开始服务)
         </button>
@@ -253,7 +261,11 @@
       <!-- 陪玩态-服务中，履约完成后上传战绩凭证 -->
       <view v-else-if="order.orderStatus === 2" class="section-card action-panel companion-finish">
         <view class="card-title">履约完成结算凭证</view>
-        <text class="im-tip">游戏打完后，请上传游戏胜利战绩截图，发起结算申请</text>
+        <view class="countdown-row">
+          <text class="tip-title">⏱ 履约剩余时间</text>
+          <text class="countdown-badge">{{ countdownText }}</text>
+        </view>
+        <text class="im-tip">游戏打完后，请上传游戏胜利战绩截图，发起结算申请。超时会自动为客户全额退款。</text>
         <button class="finish-btn" @click="handleUploadScreenshot">
           📷 上传战绩截图并申请结单
         </button>
@@ -310,8 +322,11 @@ const isReviewed = ref(false);
 const selectedTags = ref<string[]>(['声音超甜', '带飞全场']);
 const impressionTags = ['声音超甜', '技术顶级', '带飞全场', '耐心温柔', '不压力超幽默'];
 
-// 10分钟接单超时倒计时
-const remainingSeconds = ref(600);
+// 当前阶段剩余倒计时（秒）
+// ⚠️ 倒计时以【服务端按绝对截止时间计算的剩余秒数】为准，
+//    前端只做本地递减展示，每次轮询再向服务端对齐，
+//    因此反复进入该页面 / 轮询刷新都不会把倒计时重置回 10:00。
+const remainingSeconds = ref(0);
 let countdownTimer: any = null;
 
 const countdownText = computed(() => {
@@ -320,15 +335,34 @@ const countdownText = computed(() => {
   return `${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
 });
 
+/** 倒计时提示文案（区分待接单 / 服务中两个阶段） */
+const countdownTitle = computed(() => {
+  if (order.value.orderStatus === 2) {
+    return '⏱ 服务中，超时未完成将自动全额退款';
+  }
+  return '⏳ 正在等待陪玩师接单';
+});
+
+/** 用服务端下发的权威剩余秒数校准本地倒计时 */
+function syncCountdownFromServer() {
+  const server = order.value.remainingSeconds;
+  if (typeof server === 'number' && server >= 0) {
+    remainingSeconds.value = server;
+  }
+}
+
 function startCountdown() {
-  if (countdownTimer) clearInterval(countdownTimer);
-  remainingSeconds.value = 600; // 10分钟倒计时
+  // 校准一次（服务端权威值）
+  syncCountdownFromServer();
+  // 定时器只启动一次，避免每次轮询都重置
+  if (countdownTimer) return;
   countdownTimer = setInterval(() => {
     if (remainingSeconds.value > 0) {
       remainingSeconds.value--;
     } else {
       clearInterval(countdownTimer);
-      // 倒计时归零，自动调用超时退款接口
+      countdownTimer = null;
+      // 倒计时归零，刷新订单状态（服务端调度器会自动执行退款）
       if (order.value.orderStatus === 1) {
         autoRefundTimeoutApi(order.value.orderSn).then(() => {
           uni.showModal({
@@ -339,7 +373,19 @@ function startCountdown() {
               loadOrderDetail(order.value.orderSn);
             }
           });
+        }).catch(() => {
+          loadOrderDetail(order.value.orderSn);
         });
+      } else if (order.value.orderStatus === 2) {
+        uni.showModal({
+          title: '服务超时',
+          content: '陪玩师接单后长时间未完成服务，系统将自动为您全额原路退款。',
+          showCancel: false,
+          success: () => {
+            loadOrderDetail(order.value.orderSn);
+          }
+        });
+        loadOrderDetail(order.value.orderSn);
       }
     }
   }, 1000);

@@ -202,16 +202,8 @@ public class OrderFlowIntegrationTest {
             // 自动为 user_wallet 补充 version 乐观锁并发安全字段
             try { stmt.execute("ALTER TABLE `user_wallet` ADD COLUMN `version` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
 
-            // 自动校正 game_category 字典 (建库脚本若用错字符集, 中文名会写成乱码,
-            // 导致按名称关联 game_id 全部失效 -> 所有游戏都显示成王者荣耀图标)
-            try {
-                stmt.execute("UPDATE `game_category` SET `name`='王者荣耀', `icon`='/static/game/honor-of-kings.png' WHERE `id`=1;");
-                stmt.execute("UPDATE `game_category` SET `name`='英雄联盟', `icon`='/static/game/league-of-legends.png' WHERE `id`=2;");
-                stmt.execute("UPDATE `game_category` SET `name`='和平精英', `icon`='/static/game/pubg.png' WHERE `id`=3;");
-                stmt.execute("UPDATE `game_category` SET `name`='无畏契约', `icon`='/static/game/valorant.png' WHERE `id`=4;");
-                stmt.execute("UPDATE `game_category` SET `name`='永劫无间', `icon`='/static/game/sword.png' WHERE `id`=5;");
-                stmt.execute("UPDATE `game_category` SET `name`='英雄联盟手游', `icon`='/static/game/riot-games.png' WHERE `id`=6;");
-            } catch (Exception ignored) {}
+            // 游戏品类字典由 GameCatalogInitializer 在容器启动时幂等自愈(名称/图标/缺失补建),
+            // 这里不再硬编码 id->名称的 UPDATE, 避免与扩展后的 24 个品类映射冲突。
 
             // 自动重建/升级 notice_log 为「平台线下通知事件队列」结构
             try { stmt.execute("DROP TABLE IF EXISTS `notice_log`;"); } catch (Exception ignored) {}
@@ -409,6 +401,12 @@ public class OrderFlowIntegrationTest {
     @Order(4)
     public void test4_CompanionAcceptAndCompleteFlow() {
         System.out.println("\n========== [单元测试 4: 陪练师接单与完结全链路流转测试] ==========");
+
+        // 【确定性】先把抽佣比例固定为 10%，避免受 sys_config 中历史残留值影响
+        PlatformConfigDTO deterministic = new PlatformConfigDTO();
+        deterministic.setPaymentMode("mock");
+        deterministic.setCommissionPercent(10.0);
+        platformConfigService.savePlatformConfig(deterministic);
 
         // 1. 甜心小鹿 (20001) 点击【确认接单】
         companionOrderService.acceptOrder(companionUserId, createdOrderSn);
@@ -1075,7 +1073,7 @@ public class OrderFlowIntegrationTest {
         var categories = gameCategoryMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
         );
-        assertTrue(categories.size() >= 6, "游戏品类字典必须至少包含 6 个标准游戏！");
+        assertTrue(categories.size() >= 24, "游戏品类字典必须至少包含 24 个主流游戏品类！");
         for (var c : categories) {
             assertNotNull(c.getIcon(), "游戏「" + c.getName() + "」必须有图标！");
             assertTrue(c.getIcon().startsWith("/static/game/"),
@@ -1165,5 +1163,81 @@ public class OrderFlowIntegrationTest {
         assertNotNull(matched.get().getCompanionPhone(), "管理员待接单列表必须带出陪玩师手机号(供线下通知)！");
 
         System.out.println("✅ 游戏字典自愈与图标关联正确性测试全部通过！");
+    }
+
+    /**
+     * 【单元测试 17】倒计时不重置 + 陪玩师 60 分钟履约超时自动全额退款
+     */
+    @Test
+    @Order(17)
+    public void test17_CountdownNotResetAndServiceTimeoutRefund() {
+        System.out.println("\n========== [单元测试 17: 倒计时不重置 + 履约超时自动退款测试] ==========");
+
+        // 1. 客户下单 (指定陪玩师)
+        CreateOrderDTO dto = new CreateOrderDTO();
+        dto.setCompanionUserId(companionUserId);
+        dto.setSkillId(testSkillId);
+        dto.setQuantity(1);
+        dto.setGameServer("微信区");
+        dto.setGameAccount("倒计时测试");
+        PaymentResultVO pay = companionOrderService.createAndPayOrder(clientUserId, dto);
+        String orderSn = pay.getOrderSn();
+
+        // 2. 待接单(1) 状态必须带出接单倒计时 (约 600 秒)
+        CompanionOrder fresh = companionOrderService.getOrderDetail(orderSn);
+        assertNotNull(fresh.getRemainingSeconds(), "待接单订单必须带出接单倒计时！");
+        assertTrue(fresh.getRemainingSeconds() > 580 && fresh.getRemainingSeconds() <= 600,
+                "接单倒计时应约为 600 秒, 实际=" + fresh.getRemainingSeconds());
+
+        // 3. 【关键】模拟时间流逝: 下单已过 9 分钟 -> 倒计时应剩约 60 秒, 而不是重置为 600
+        CompanionOrder backdated = companionOrderService.getOrderDetail(orderSn);
+        backdated.setCreateTime(java.time.LocalDateTime.now().minusMinutes(9));
+        companionOrderMapper.updateById(backdated);
+
+        CompanionOrder after9 = companionOrderService.getOrderDetail(orderSn);
+        assertTrue(after9.getRemainingSeconds() <= 90,
+                "倒计时必须按绝对截止时间递减(剩约60秒), 绝不能重置为 600! 实际=" + after9.getRemainingSeconds());
+
+        // 4. 再次查询也不能重置
+        CompanionOrder again = companionOrderService.getOrderDetail(orderSn);
+        assertTrue(again.getRemainingSeconds() <= 90,
+                "重复进入页面不得把倒计时重置回 10:00! 实际=" + again.getRemainingSeconds());
+
+        // 5. 陪玩师接单 -> 服务中(2), 倒计时切换为履约时限 (60 分钟)
+        companionOrderService.acceptOrder(companionUserId, orderSn);
+        CompanionOrder serving = companionOrderService.getOrderDetail(orderSn);
+        assertEquals(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode(), serving.getOrderStatus());
+        assertNotNull(serving.getRemainingSeconds(), "服务中订单必须带出履约倒计时！");
+        assertTrue(serving.getRemainingSeconds() > 3500 && serving.getRemainingSeconds() <= 3600,
+                "履约倒计时应约为 3600 秒(60分钟), 实际=" + serving.getRemainingSeconds());
+
+        // 6. 模拟接单已超过 60 分钟仍未完成服务 -> 自动全额退款
+        CompanionOrder longServing = companionOrderService.getOrderDetail(orderSn);
+        longServing.setAcceptTime(java.time.LocalDateTime.now().minusMinutes(61));
+        companionOrderMapper.updateById(longServing);
+
+        boolean refunded = companionOrderService.checkAndRefundIfServiceTimeout(orderSn);
+        assertTrue(refunded, "陪玩师超过 60 分钟未完成服务必须自动全额退款！");
+
+        CompanionOrder afterRefund = companionOrderService.getOrderDetail(orderSn);
+        assertEquals(OrderStatusEnum.REFUNDED.getCode(), afterRefund.getOrderStatus(),
+                "履约超时退款后订单状态必须为已退款(6)！");
+        assertNotNull(afterRefund.getPayFlow());
+        assertEquals(3, afterRefund.getPayFlow().getPayStatus(), "支付流水必须冲正为已退款(3)！");
+        assertEquals(afterRefund.getPayFlow().getChannelFee(), afterRefund.getPayFlow().getRefundChannelFee(),
+                "通道费必须同步冲正！");
+
+        // 7. 未超时的订单不得被误退款
+        CreateOrderDTO dto2 = new CreateOrderDTO();
+        dto2.setCompanionUserId(companionUserId);
+        dto2.setSkillId(testSkillId);
+        dto2.setQuantity(1);
+        dto2.setGameServer("微信区");
+        dto2.setGameAccount("未超时测试");
+        String orderSn2 = companionOrderService.createAndPayOrder(clientUserId, dto2).getOrderSn();
+        assertFalse(companionOrderService.checkAndRefundIfServiceTimeout(orderSn2),
+                "未到 60 分钟的订单绝不允许被误退款！");
+
+        System.out.println("✅ 倒计时不重置与履约超时自动退款测试全部通过！");
     }
 }

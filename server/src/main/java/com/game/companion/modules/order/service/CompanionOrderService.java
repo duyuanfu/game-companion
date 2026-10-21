@@ -88,6 +88,11 @@ public interface CompanionOrderService extends IService<CompanionOrder> {
     boolean checkAndRefundIfTimeout(String orderSn);
 
     /**
+     * 【履约超时自动退款】陪玩师接单后超过阈值仍未完成服务，系统自动为客户全额原路退款。
+     */
+    boolean checkAndRefundIfServiceTimeout(String orderSn);
+
+    /**
      * 客户发起售后维权与平台争议仲裁
      */
     void applyDispute(Long clientUserId, String orderSn, String reason);

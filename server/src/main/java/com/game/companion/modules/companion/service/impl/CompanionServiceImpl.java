@@ -20,6 +20,7 @@ import com.game.companion.modules.user.mapper.SysUserMapper;
 import com.game.companion.modules.wallet.entity.UserWallet;
 import com.game.companion.modules.wallet.mapper.UserWalletMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -41,6 +42,12 @@ public class CompanionServiceImpl implements CompanionService {
     private final CompanionOrderMapper companionOrderMapper;
     private final com.game.companion.modules.order.mapper.OrderReviewMapper orderReviewMapper;
     private final com.game.companion.modules.game.mapper.GameCategoryMapper gameCategoryMapper;
+
+    /**
+     * 陪玩师接单后的履约时长上限 (分钟)。超时未完成服务，系统自动为客户全额原路退款。
+     */
+    @Value("${platform.order-service-timeout-minutes:60}")
+    private int serviceTimeoutMinutes;
 
     @Override
     public List<CompanionItemVO> listCompanions(String gameName, Long currentUserId) {
@@ -99,6 +106,29 @@ public class CompanionServiceImpl implements CompanionService {
                             .eq(com.game.companion.modules.order.entity.OrderReview::getCompanionUserId, user.getId())
             );
 
+            // 【服务中状态】查询该陪玩师当前是否有进行中的订单(服务中2 / 待客户确认3)
+            CompanionOrder servingOrder = companionOrderMapper.selectOne(
+                    new LambdaQueryWrapper<CompanionOrder>()
+                            .eq(CompanionOrder::getCompanionUserId, user.getId())
+                            .in(CompanionOrder::getOrderStatus, 2, 3)
+                            .orderByDesc(CompanionOrder::getAcceptTime)
+                            .last("LIMIT 1")
+            );
+            boolean isServing = servingOrder != null;
+            String servingStatusText = null;
+            String servingRemainText = null;
+            if (isServing) {
+                servingStatusText = (servingOrder.getOrderStatus() != null && servingOrder.getOrderStatus() == 3)
+                        ? "待客户确认" : "服务中";
+                long remain = 0;
+                if (servingOrder.getAcceptTime() != null) {
+                    remain = java.time.Duration.between(LocalDateTime.now(),
+                            servingOrder.getAcceptTime().plusMinutes(serviceTimeoutMinutes)).getSeconds();
+                }
+                long safe = Math.max(0, remain);
+                servingRemainText = String.format("%02d:%02d", safe / 60, safe % 60);
+            }
+
             CompanionItemVO vo = CompanionItemVO.builder()
                     .id(p.getId())
                     .userId(user.getId())
@@ -110,6 +140,9 @@ public class CompanionServiceImpl implements CompanionService {
                     .unit(primarySkill != null ? primarySkill.getUnit() : "小时")
                     .skillId(primarySkill != null ? primarySkill.getId() : 1L)
                     .isOnline(p.getIsOnline() == 1)
+                    .isServing(isServing)
+                    .servingStatusText(servingStatusText)
+                    .servingRemainText(servingRemainText)
                     .voiceDuration(p.getVoiceDuration())
                     .voiceUrl(p.getVoiceUrl())
                     .rating(finalRating)
