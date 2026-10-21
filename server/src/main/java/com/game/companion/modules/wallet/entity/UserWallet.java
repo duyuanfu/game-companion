@@ -3,6 +3,7 @@ package com.game.companion.modules.wallet.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -26,6 +27,10 @@ public class UserWallet implements Serializable {
     private Integer frozenBalance;
 
     private Integer totalIncome;
+
+    @Version
+    @Schema(description = "乐观锁版本号 (并发安全控制)")
+    private Integer version;
 
     private LocalDateTime createTime;
 

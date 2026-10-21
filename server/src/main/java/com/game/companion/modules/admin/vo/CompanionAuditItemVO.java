@@ -43,4 +43,7 @@ public class CompanionAuditItemVO {
 
     @Schema(description = "申请提交时间")
     private LocalDateTime applyTime;
+
+    @Schema(description = "申报的全部擅长游戏技能资质列表 (支持多游戏)")
+    private java.util.List<com.game.companion.modules.companion.entity.CompanionSkill> skills;
 }

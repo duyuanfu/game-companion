@@ -33,9 +33,11 @@ public class CompanionServiceImpl implements CompanionService {
     private final SysUserMapper sysUserMapper;
     private final UserWalletMapper userWalletMapper;
     private final CompanionOrderMapper companionOrderMapper;
+    private final com.game.companion.modules.order.mapper.OrderReviewMapper orderReviewMapper;
+    private final com.game.companion.modules.game.mapper.GameCategoryMapper gameCategoryMapper;
 
     @Override
-    public List<CompanionItemVO> listCompanions(String gameName) {
+    public List<CompanionItemVO> listCompanions(String gameName, Long currentUserId) {
         List<CompanionProfile> profiles = companionProfileMapper.selectList(
                 new LambdaQueryWrapper<CompanionProfile>()
                         .eq(CompanionProfile::getAuditStatus, 1)
@@ -48,6 +50,11 @@ public class CompanionServiceImpl implements CompanionService {
         for (CompanionProfile p : profiles) {
             SysUser user = sysUserMapper.selectById(p.getUserId());
             if (user == null) continue;
+
+            // 【防刷单】从后端源头屏蔽自己的陪玩师卡片
+            if (currentUserId != null && currentUserId.equals(user.getId())) {
+                continue;
+            }
 
             LambdaQueryWrapper<CompanionSkill> skillWrapper = new LambdaQueryWrapper<CompanionSkill>()
                     .eq(CompanionSkill::getCompanionId, p.getId())
@@ -65,6 +72,27 @@ public class CompanionServiceImpl implements CompanionService {
 
             CompanionSkill primarySkill = skills.isEmpty() ? null : skills.get(0);
 
+            // 动态真实统计：综合评分联动 + 真实完成接单量
+            java.math.BigDecimal realAvgRating = orderReviewMapper.calculateAverageRating(user.getId());
+            java.math.BigDecimal finalRating = (realAvgRating != null) 
+                    ? realAvgRating.setScale(1, java.math.RoundingMode.HALF_UP) 
+                    : (p.getRating() != null ? p.getRating() : new java.math.BigDecimal("5.0"));
+
+            // 【单一数据源】累计接单数直接以「已完结订单」的真实条数为准，
+            // 避免与 companion_profile.order_count 缓存字段重复累加导致数字翻倍
+            Long realFinishedOrders = companionOrderMapper.selectCount(
+                    new LambdaQueryWrapper<CompanionOrder>()
+                            .eq(CompanionOrder::getCompanionUserId, user.getId())
+                            .eq(CompanionOrder::getOrderStatus, 4)
+            );
+            int totalOrderCount = realFinishedOrders == null ? 0 : realFinishedOrders.intValue();
+
+            // 统计该陪练师在 order_review 中真实收到的好评数
+            Long reviewCount = orderReviewMapper.selectCount(
+                    new LambdaQueryWrapper<com.game.companion.modules.order.entity.OrderReview>()
+                            .eq(com.game.companion.modules.order.entity.OrderReview::getCompanionUserId, user.getId())
+            );
+
             CompanionItemVO vo = CompanionItemVO.builder()
                     .id(p.getId())
                     .userId(user.getId())
@@ -78,8 +106,9 @@ public class CompanionServiceImpl implements CompanionService {
                     .isOnline(p.getIsOnline() == 1)
                     .voiceDuration(p.getVoiceDuration())
                     .voiceUrl(p.getVoiceUrl())
-                    .rating(p.getRating())
-                    .orderCount(p.getOrderCount())
+                    .rating(finalRating)
+                    .orderCount(totalOrderCount)
+                    .reviewCount(reviewCount != null ? reviewCount.intValue() : 0)
                     .bio(p.getBio())
                     .build();
 
@@ -152,6 +181,99 @@ public class CompanionServiceImpl implements CompanionService {
         if (profile != null) {
             profile.setIsOnline(isOnline ? 1 : 0);
             companionProfileMapper.updateById(profile);
+        }
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public void applyCompanion(Long userId, com.game.companion.modules.companion.dto.ApplyCompanionDTO dto) {
+        if (dto.getSkills() == null || dto.getSkills().isEmpty()) {
+            throw new ApiException("申请入驻必须至少添加一个擅长游戏服务项目");
+        }
+
+        // 1. 同步更新用户基础实名与手机号
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user != null) {
+            if (dto.getRealName() != null && !dto.getRealName().trim().isEmpty()) {
+                user.setNickname(dto.getRealName().trim());
+            }
+            if (dto.getPhone() != null && !dto.getPhone().trim().isEmpty()) {
+                user.setPhone(dto.getPhone().trim());
+            }
+            user.setUpdateTime(LocalDateTime.now());
+            sysUserMapper.updateById(user);
+        }
+
+        // 2. 创建或更新陪练师资料主档 (重置为待审核状态 0)
+        CompanionProfile profile = companionProfileMapper.selectOne(
+                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, userId)
+        );
+        if (profile == null) {
+            profile = new CompanionProfile();
+            profile.setUserId(userId);
+            profile.setRating(new java.math.BigDecimal("5.0"));
+            profile.setOrderCount(0);
+            profile.setIsOnline(1);
+            profile.setCreateTime(LocalDateTime.now());
+        }
+        profile.setRealName(dto.getRealName());
+        profile.setBio(dto.getBio());
+        // 【彻底移除假音色兜底】未真实录制上传原声时一律留空，由前端做无音频降级展示
+        profile.setVoiceUrl(dto.getVoiceUrl() != null && !dto.getVoiceUrl().trim().isEmpty()
+                ? dto.getVoiceUrl().trim() : null);
+        profile.setVoiceDuration(dto.getVoiceDuration() != null && dto.getVoiceDuration() > 0
+                ? dto.getVoiceDuration() : 0);
+        profile.setAuditStatus(0); // 待审核
+        profile.setRejectReason(null);
+        profile.setUpdateTime(LocalDateTime.now());
+
+        if (profile.getId() == null) {
+            companionProfileMapper.insert(profile);
+        } else {
+            companionProfileMapper.updateById(profile);
+        }
+
+        // 3. 多游戏技能资质批量入库 (支持同时申报多个游戏)
+        // 先清理该陪练历史旧技能记录，重新批量插入最新申报技能
+        companionSkillMapper.delete(
+                new LambdaQueryWrapper<CompanionSkill>().eq(CompanionSkill::getCompanionId, profile.getId())
+        );
+
+        for (var skillItem : dto.getSkills()) {
+            // 解析游戏品类ID
+            var category = gameCategoryMapper.selectOne(
+                    new LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
+                            .eq(com.game.companion.modules.game.entity.GameCategory::getName, skillItem.getGameName())
+            );
+            Long gameId = category != null ? category.getId() : 1L;
+
+            int priceInCents = 2500;
+            if (skillItem.getPrice() != null && skillItem.getPrice() > 0) {
+                // 【单位显式化】priceUnit 缺省按「元」处理，彻底消除原先 <500 阈值猜测导致的价格放大 100 倍的缺陷
+                boolean priceInYuan = !("FEN".equalsIgnoreCase(skillItem.getPriceUnit()));
+                long cents = priceInYuan
+                        ? (long) skillItem.getPrice() * 100L
+                        : (long) skillItem.getPrice();
+                // 合法区间: 0.01 元 ~ 100000 元
+                if (cents < 1L || cents > 10_000_000L) {
+                    throw new com.game.companion.common.exception.ApiException(
+                            "【游戏: " + skillItem.getGameName() + "】单价设置超出合法范围，请检查后重新提交");
+                }
+                priceInCents = (int) cents;
+            }
+
+            CompanionSkill skill = new CompanionSkill();
+            skill.setCompanionId(profile.getId());
+            skill.setUserId(userId);
+            skill.setGameId(gameId);
+            skill.setGameName(skillItem.getGameName());
+            skill.setRankName(skillItem.getRankName());
+            skill.setRankImg(skillItem.getRankImg());
+            skill.setPrice(priceInCents);
+            skill.setUnit(skillItem.getUnit() != null ? skillItem.getUnit() : "小时");
+            skill.setStatus(1); // 默认上架
+            skill.setCreateTime(LocalDateTime.now());
+            companionSkillMapper.insert(skill);
         }
     }
 }

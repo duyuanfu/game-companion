@@ -10,10 +10,13 @@ export interface ChatMessageItem {
   createTime: string;
 }
 
+/**
+ * 发送开黑聊天消息。
+ * 【安全】发送人取自当前登录会话，后端不再接受 senderId 覆盖参数。
+ */
 export function sendChatMessageApi(data: {
   orderSn: string;
   content: string;
-  senderId?: number;
 }) {
   return request<ChatMessageItem>({
     url: '/chat/send',

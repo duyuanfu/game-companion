@@ -9,10 +9,6 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
-import com.game.companion.modules.companion.entity.CompanionProfile;
-import com.game.companion.modules.companion.entity.CompanionSkill;
-import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
-import com.game.companion.modules.companion.mapper.CompanionSkillMapper;
 import com.game.companion.modules.user.dto.BindPhoneDTO;
 import com.game.companion.modules.user.dto.WxLoginDTO;
 import com.game.companion.modules.user.entity.SysUser;
@@ -36,8 +32,7 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
     @Autowired(required = false)
     private WxMaService wxMaService;
 
-    private final CompanionProfileMapper companionProfileMapper;
-    private final CompanionSkillMapper companionSkillMapper;
+    private final com.game.companion.modules.wallet.mapper.UserWalletMapper userWalletMapper;
 
     @Value("${wx.miniapp.appid:}")
     private String wxAppId;
@@ -65,65 +60,53 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
             }
         }
 
-        // 2. 开发降级 OpenID
+        // 2. 开发降级 OpenID (仅在微信官方无法换取时按 code 进行区分)
         if (openid == null) {
-            openid = resolveDevOpenId(dto.getDeviceType());
+            openid = resolveDevOpenId(dto.getCode(), dto.getDeviceType());
         }
 
-        // 3. 🌟 核心破案点：双端角色与真实微信身份精准绑定
-        boolean isPhoneDevice = "phone".equalsIgnoreCase(dto.getDeviceType());
-        SysUser user;
+        // 针对线上 unionid 为空或空串进行安全归一化，坚决防止空字符串存库导致 uk_unionid 唯一键冲突
+        String cleanUnionid = normalizeUnionid(unionid);
 
-        if (isPhoneDevice) {
-            // 【手机真机微信端】-> 对应陪练师【甜心小鹿 (ID: 20001, role: 2)】
-            user = getById(20001L);
-            if (user == null) {
-                user = new SysUser();
-                user.setId(20001L);
-                user.setNickname("甜心小鹿");
-                user.setAvatarUrl("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80");
-                user.setPhone("13800000001");
-                user.setRole(RoleEnum.COMPANION.getCode());
-                user.setStatus(1);
-                user.setDeleted(0);
-                user.setCreateTime(LocalDateTime.now());
-            }
-
-            // 🌟 最关键一步：把当前扫码真机手机换出来的【真实微信 OpenID】直接绑定给甜心小鹿！
-            // 只有这样，后续向甜心小鹿推送微信卡片时，才能精准推到你手机微信里！
+// 3. 【真实全动态用户建档】完全按微信号唯一 OpenID 独立建档注册，彻底去除任何硬编码绑定
+        SysUser user = getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getOpenid, openid));
+        if (user == null) {
+            // 新微信号首次进入：自动完成静默建档注册
+            user = new SysUser();
             user.setOpenid(openid);
-            if (unionid != null) user.setUnionid(unionid);
-            user.setRole(RoleEnum.COMPANION.getCode());
+            user.setUnionid(cleanUnionid);
+            user.setNickname("微信用户_" + RandomUtil.randomNumbers(4));
+            user.setAvatarUrl("https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80");
+            user.setRole(RoleEnum.CLIENT.getCode()); // 默认角色：普通点单客户
+            user.setStatus(1);
+            user.setDeleted(0);
+            user.setCreateTime(LocalDateTime.now());
             user.setUpdateTime(LocalDateTime.now());
-            saveOrUpdate(user);
+            save(user);
 
-            ensureCompanionProfileExists(user.getId());
-            log.info("========== [真机设备已绑定陪玩师 甜心小鹿] ==========");
-            log.info("用户ID: 20001, 绑定的真实微信OpenID: {}, 来源: {}", openid, isRealWxAuth ? "微信官方API" : "开发模拟");
+            // 自动初始化该微信号的独立资金钱包
+            com.game.companion.modules.wallet.entity.UserWallet wallet = new com.game.companion.modules.wallet.entity.UserWallet();
+            wallet.setUserId(user.getId());
+            wallet.setBalance(0);
+            wallet.setFrozenBalance(0);
+            wallet.setTotalIncome(0);
+            wallet.setVersion(0);
+            wallet.setCreateTime(LocalDateTime.now());
+            wallet.setUpdateTime(LocalDateTime.now());
+            userWalletMapper.insert(wallet);
+
+            log.info("========== [新微信号首次扫码建档注册成功] ==========");
+            log.info("用户ID: {}, 真实OpenID: {}, 来源: {}", user.getId(), openid, isRealWxAuth ? "微信官方API" : "开发模拟");
             log.info("==================================================");
         } else {
-            // 【电脑模拟器端】-> 对应【点单老板客户 (role: 1)】
-            user = getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getOpenid, openid));
-            if (user == null) {
-                user = new SysUser();
-                user.setOpenid(openid);
-                user.setUnionid(unionid);
-                user.setNickname("点单老板_" + RandomUtil.randomNumbers(4));
-                user.setAvatarUrl("https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80");
-                user.setPhone(null);
-                user.setRole(RoleEnum.CLIENT.getCode());
-                user.setStatus(1);
-                user.setDeleted(0);
-                user.setCreateTime(LocalDateTime.now());
-                user.setUpdateTime(LocalDateTime.now());
-                save(user);
-                log.info("========== [模拟器电脑端注册点单老板] ==========");
-                log.info("用户ID: {}, OpenID: {}", user.getId(), openid);
-                log.info("==============================================");
-            } else {
-                user.setUpdateTime(LocalDateTime.now());
-                updateById(user);
+            // 已建档老用户：更新最新访问时间与UnionId
+            if (cleanUnionid != null) {
+                user.setUnionid(cleanUnionid);
             }
+            user.setUpdateTime(LocalDateTime.now());
+            updateById(user);
+            log.info("【微信用户登录】用户ID: {}, 昵称: {}, 角色: {}, 来源: {}", 
+                    user.getId(), user.getNickname(), user.getRole(), isRealWxAuth ? "微信官方API" : "开发模拟");
         }
 
         // 标准生产级：Sa-Token 会话托管
@@ -141,75 +124,54 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
                 .build();
     }
 
-    private void ensureCompanionProfileExists(Long userId) {
-        CompanionProfile profile = companionProfileMapper.selectOne(
-                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, userId)
-        );
-        if (profile == null) {
-            profile = new CompanionProfile();
-            profile.setUserId(userId);
-            profile.setRealName("鹿小甜");
-            profile.setBio("主玩软辅中单，听指挥超温柔，输赢都不压力~");
-            profile.setVoiceUrl("/static/audio/voice_sweet_girl.mp3");
-            profile.setVoiceDuration(6);
-            profile.setIsOnline(1);
-            profile.setRating(new java.math.BigDecimal("5.0"));
-            profile.setOrderCount(128);
-            profile.setAuditStatus(1);
-            profile.setCreateTime(LocalDateTime.now());
-            companionProfileMapper.insert(profile);
-
-            CompanionSkill skill = new CompanionSkill();
-            skill.setCompanionId(profile.getId());
-            skill.setUserId(userId);
-            skill.setGameId(1L);
-            skill.setGameName("王者荣耀");
-            skill.setRankName("最强王者 35星");
-            skill.setPrice(2500);
-            skill.setUnit("小时");
-            skill.setStatus(1);
-            skill.setCreateTime(LocalDateTime.now());
-            companionSkillMapper.insert(skill);
+    private String resolveDevOpenId(String code, String deviceType) {
+        if (code != null && !code.trim().isEmpty() && !"the code is a mock one".equals(code)) {
+            return "dev_openid_" + cn.hutool.crypto.SecureUtil.md5(code).substring(0, 16);
         }
-    }
-
-    private String resolveDevOpenId(String deviceType) {
         if ("phone".equalsIgnoreCase(deviceType)) {
-            return "mock_openid_companion_1";
+            return "dev_openid_phone_user";
         }
-        return "mock_openid_client_simulator";
+        return "dev_openid_simulator_user";
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public String bindWxPhoneNumber(Long userId, BindPhoneDTO dto) {
+        // 【安全修复】禁止再使用「取库中最近活跃用户」的方式兜底，避免把手机号错绑到他人账号
+        if (userId == null || userId <= 0) {
+            throw new ApiException("操作被拒绝：请先登录后再绑定手机号");
+        }
         SysUser user = getById(userId);
         if (user == null) {
-            user = getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getOpenid, "mock_dev_developer_openid"));
-        }
-        if (user == null) {
-            throw new ApiException("未找到对应用户记录");
+            throw new ApiException("用户不存在，请重新登录");
         }
 
         String phoneNumber = null;
-        boolean hasValidWxConfig = wxMaService != null && wxAppId != null 
-                && !wxAppId.isEmpty() && !wxAppId.contains("your-");
 
-        if (hasValidWxConfig) {
-            try {
-                WxMaPhoneNumberInfo phoneInfo = wxMaService.getUserService().getPhoneNoInfo(dto.getCode());
-                phoneNumber = phoneInfo.getPhoneNumber();
-            } catch (Exception e) {
-                log.error("微信官方接口解密手机号失败: ", e);
+        // 1. 优先使用前端手动填入的真实手机号 (彻底避免无权限时向微信发送空 code 报 40029)
+        if (dto.getPhone() != null && !dto.getPhone().trim().isEmpty()) {
+            phoneNumber = dto.getPhone().trim();
+            log.info("【手机号绑定】直接采用用户填写的真实手机号: {}", phoneNumber);
+        } else {
+            // 2. 仅在未传手机号且 code 有效非空时，才请求微信官方接口解密
+            boolean hasValidWxConfig = wxMaService != null && wxAppId != null 
+                    && !wxAppId.isEmpty() && !wxAppId.contains("your-");
+            boolean hasValidCode = dto.getCode() != null && !dto.getCode().trim().isEmpty() 
+                    && !dto.getCode().startsWith("mock_");
+
+            if (hasValidWxConfig && hasValidCode) {
+                try {
+                    log.info("正在调用微信官方接口解密手机号: code={}", dto.getCode());
+                    WxMaPhoneNumberInfo phoneInfo = wxMaService.getUserService().getPhoneNoInfo(dto.getCode().trim());
+                    phoneNumber = phoneInfo.getPhoneNumber();
+                } catch (Exception e) {
+                    log.error("微信官方接口解密手机号失败: ", e);
+                }
             }
         }
 
         if (phoneNumber == null || phoneNumber.isEmpty()) {
-            if (dto.getPhone() != null && !dto.getPhone().isEmpty()) {
-                phoneNumber = dto.getPhone();
-            } else {
-                phoneNumber = "13800" + RandomUtil.randomNumbers(6);
-            }
+            phoneNumber = "13800" + RandomUtil.randomNumbers(6);
         }
 
         user.setPhone(phoneNumber);
@@ -221,5 +183,20 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
         log.info("==================================================");
         
         return phoneNumber;
+    }
+
+    /**
+     * 针对微信生态场景下 unionid 可能为空或空串进行安全归一化
+     * 确保空值在数据库中保持为 NULL，避免触发 uk_unionid 唯一键冲突
+     */
+    private String normalizeUnionid(String unionid) {
+        if (unionid == null) {
+            return null;
+        }
+        String trimmed = unionid.trim();
+        if (trimmed.isEmpty() || "null".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
     }
 }

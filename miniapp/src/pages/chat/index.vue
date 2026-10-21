@@ -18,7 +18,8 @@
           {{ isConsultMode ? '支持未下单先沟通，确认在线再付费' : `区服: ${gameServer} | 账号: ${gameAccount}` }}
         </text>
         <view class="header-action-group">
-          <!-- 核心功能 1：客户一键加钟续费按钮 -->
+          <!-- 【架构扩展插槽】加钟续单功能预留：后续对接独立子订单体系 (addon_sub_order) -->
+          <!-- 暂按下线，保留扩展接口槽位
           <button 
             v-if="!isConsultMode && isClient" 
             class="add-on-btn" 
@@ -27,6 +28,7 @@
           >
             ⚡️ 加钟 (+1小时)
           </button>
+          -->
           <text v-if="!isConsultMode" class="copy-btn" @click="copyText(gameAccount)">复制游戏ID</text>
         </view>
       </view>
@@ -121,8 +123,8 @@ const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377
 
 const orderSn = ref('');
 const isConsultMode = ref(false);
-const targetCompanionId = ref<number>(20001);
-const targetName = ref('甜心小鹿');
+const targetCompanionId = ref<number>(0);
+const targetName = ref('开黑伙伴');
 const gameName = ref('王者荣耀');
 const gameServer = ref('微信区');
 const gameAccount = ref('开黑小达人');
@@ -171,8 +173,7 @@ function handleSendMessage() {
 
   sendChatMessageApi({
     orderSn: roomSn,
-    content,
-    senderId: currentUserId.value
+    content
   }).then(res => {
     inputContent.value = '';
     messages.value.push(res.data);
@@ -184,24 +185,14 @@ function handleSendMessage() {
   });
 }
 
+/**
+ * 【架构扩展插槽】一键加钟续费
+ * 规范设计应通过独立的加钟子订单 (addon_sub_order) 发起并独立支付，当前版本已完成主订单解耦保护。
+ */
 function handleAddOnOrder() {
-  uni.showModal({
-    title: '⚡️ 一键加钟续单',
-    content: '为当前开黑伙伴加钟 1 小时/局，是否立即续费？',
-    confirmColor: '#6366f1',
-    success: (res) => {
-      if (res.confirm) {
-        addingOn.value = true;
-        addOnOrderApi(orderSn.value, 1, currentUserId.value).then(() => {
-          uni.showToast({ title: '加钟续费成功！', icon: 'success' });
-          loadMessages();
-        }).catch(err => {
-          uni.showToast({ title: err.message || '加钟失败', icon: 'none' });
-        }).finally(() => {
-          addingOn.value = false;
-        });
-      }
-    }
+  uni.showToast({
+    title: '加钟续单功能正在升级为独立子订单体系，敬请期待！',
+    icon: 'none'
   });
 }
 

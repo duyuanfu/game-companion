@@ -24,6 +24,10 @@ public class NoticeServiceImpl implements NoticeService {
 
     private final SysUserMapper sysUserMapper;
 
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.game.companion.modules.admin.service.PlatformConfigService platformConfigService;
+
     @Value("${wx.miniapp.template-id.new-order:Hi9R8Rt60xAEsrGEL9RcR-QDs_IeUntIuLSh1YaeUkU}")
     private String newOrderTemplateId;
 
@@ -32,6 +36,11 @@ public class NoticeServiceImpl implements NoticeService {
         log.info("========== [准备向陪练师推送微信官方卡片通知] ==========");
         log.info("目标陪练师ID: {}, 订单号: {}, 游戏: {}, 实付金额: ¥{}", 
                 companionUserId, orderSn, gameName, totalAmount / 100.0);
+
+        String effectiveTemplateId = newOrderTemplateId;
+        if (platformConfigService != null) {
+            effectiveTemplateId = platformConfigService.getConfig("wx.miniapp.template-id.new-order", newOrderTemplateId);
+        }
 
         SysUser companion = sysUserMapper.selectById(companionUserId);
         if (companion == null || companion.getOpenid() == null) {
@@ -45,33 +54,36 @@ public class NoticeServiceImpl implements NoticeService {
         // 1. 组装微信官方订阅消息卡片数据结构
         WxMaSubscribeMessage msg = new WxMaSubscribeMessage();
         msg.setToUser(openid);
-        msg.setTemplateId(newOrderTemplateId);
+        msg.setTemplateId(effectiveTemplateId);
         msg.setPage("pages/order/detail?orderSn=" + orderSn);
 
         List<WxMaSubscribeMessage.MsgData> dataList = new ArrayList<>();
-        // 订单编号 (character_string 类型，最长32位数字或字母)
+        // 订单编号 (最长32位数字或字母)
         String cleanSn = orderSn.replaceAll("[^a-zA-Z0-9]", "");
         if (cleanSn.length() > 32) cleanSn = cleanSn.substring(0, 32);
-        dataList.add(new WxMaSubscribeMessage.MsgData("character_string1", cleanSn));
 
-        // 服务项目名称 (thing 类型，最长20个汉字/字符)
+        // 服务项目名称 (最长20个汉字/字符)
         String cleanGame = gameName.length() > 20 ? gameName.substring(0, 20) : gameName;
-        dataList.add(new WxMaSubscribeMessage.MsgData("thing2", cleanGame));
 
-        // 订单金额 (amount 类型，格式要求带有元)
-        dataList.add(new WxMaSubscribeMessage.MsgData("amount3", String.format("%.2f元", totalAmount / 100.0)));
+        // 金额
+        String amountStr = String.format("%.2f元", totalAmount / 100.0);
 
-        // 温馨提示 / 客户需求 (thing 类型，最长20个汉字)
-        String remark = (clientRemark != null && !clientRemark.trim().isEmpty()) ? clientRemark.trim() : "无特殊要求，正常开黑";
+        // 温馨提示 / 客户需求 (最长20个汉字)
+        String remark = (clientRemark != null && !clientRemark.trim().isEmpty()) ? clientRemark.trim() : "无特殊要求正常开黑";
         if (remark.length() > 20) remark = remark.substring(0, 20);
-        dataList.add(new WxMaSubscribeMessage.MsgData("thing4", remark));
+
+        // 微信模板字段全量容错兼容映射 (微信会精准提取模板所需的键名，缺漏则报错)
+        dataList.add(new WxMaSubscribeMessage.MsgData("thing5", cleanSn));
+        dataList.add(new WxMaSubscribeMessage.MsgData("thing36", cleanGame));
+        dataList.add(new WxMaSubscribeMessage.MsgData("thing25", amountStr));
+        dataList.add(new WxMaSubscribeMessage.MsgData("thing60", remark));
 
         msg.setData(dataList);
 
         // 2. 调用微信官方 API 执行发送
-        if (wxMaService != null && !newOrderTemplateId.startsWith("mock_")) {
+        if (wxMaService != null && !effectiveTemplateId.startsWith("mock_")) {
             try {
-                log.info("正在调用微信官方接口发送模板卡片: templateId={}, toUser={}", newOrderTemplateId, openid);
+                log.info("正在调用微信官方接口发送模板卡片: templateId={}, toUser={}", effectiveTemplateId, openid);
                 wxMaService.getMsgService().sendSubscribeMsg(msg);
                 log.info("🎉🎉 [微信官方卡片下发成功] 微信服务器已成功接收，卡片将即刻推送至手机微信服务通知！");
             } catch (Exception e) {

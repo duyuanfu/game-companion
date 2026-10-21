@@ -15,8 +15,14 @@ public class AdminDashboardVO {
     @Schema(description = "今日交易总流水 (分)")
     private Integer todayTotalAmount;
 
-    @Schema(description = "今日平台累计抽佣 (分)")
+    @Schema(description = "今日平台累计毛抽佣 (分)")
     private Integer todayPlatformFee;
+
+    @Schema(description = "今日微信支付官方通道扣点成本 (0.6%，单位: 分)")
+    private Integer todayChannelFee;
+
+    @Schema(description = "今日平台真实净利润 (分 = 平台毛抽佣 - 微信通道费)")
+    private Integer todayNetProfit;
 
     @Schema(description = "当前在线接单中陪玩师人数")
     private Integer onlineCompanionCount;

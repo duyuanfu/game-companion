@@ -15,7 +15,7 @@ DROP TABLE IF EXISTS `sys_user`;
 CREATE TABLE `sys_user` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `openid` VARCHAR(64) DEFAULT NULL COMMENT '微信小程序 OpenID',
-  `unionid` VARCHAR(64) DEFAULT NULL COMMENT '微信开放平台 UnionID (打通小程序与公众号)',
+  `unionid` VARCHAR(64) DEFAULT NULL COMMENT '微信开放平台 UnionID (注意：无UnionID时必须存为NULL，禁止存入空串以防唯一索引冲突)',
   `mp_openid` VARCHAR(64) DEFAULT NULL COMMENT '微信服务号 OpenID (用于下发公众号模板消息通知)',
   `nickname` VARCHAR(64) NOT NULL DEFAULT '微信用户' COMMENT '用户昵称',
   `avatar_url` VARCHAR(512) DEFAULT NULL COMMENT '头像地址',
@@ -94,7 +94,7 @@ CREATE TABLE `companion_skill` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='陪玩师技能与定价表';
 
 -- --------------------------------------------------------
--- 5. 订单主表 (核心业务流转中心)
+-- 5. 订单主表 (纯粹业务交易与履约域，彻底解耦资金流与清算流)
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `companion_order`;
 CREATE TABLE `companion_order` (
@@ -106,9 +106,9 @@ CREATE TABLE `companion_order` (
   `game_name` VARCHAR(64) NOT NULL COMMENT '冗余字段: 游戏名称 (如: 王者荣耀)',
   `unit_price` INT NOT NULL COMMENT '下单单价 (单位: 分)',
   `quantity` INT NOT NULL DEFAULT 1 COMMENT '购买数量 (如: 2局 或 2小时)',
-  `total_amount` INT NOT NULL COMMENT '订单总金额 (单位: 分)',
-  `platform_fee` INT NOT NULL DEFAULT 0 COMMENT '平台抽佣金额 (单位: 分，例如10%)',
-  `companion_income` INT NOT NULL DEFAULT 0 COMMENT '陪玩师最终结算所得 (单位: 分 = total - fee)',
+  `original_amount` INT NOT NULL DEFAULT 0 COMMENT '订单标价总额 (分 = 单价 x 数量)',
+  `discount_amount` INT NOT NULL DEFAULT 0 COMMENT '优惠立减金额 (分，默认0，预留优惠券/补贴扩展)',
+  `total_amount` INT NOT NULL COMMENT '买家应付/实付总额 (分 = original - discount)',
   
   -- 订单类型与流转
   `order_type` TINYINT NOT NULL DEFAULT 1 COMMENT '订单类型：1-指定陪玩单 2-大厅公共抢单',
@@ -120,18 +120,18 @@ CREATE TABLE `companion_order` (
   `game_account` VARCHAR(64) DEFAULT NULL COMMENT '游戏昵称/账号',
   `client_remark` VARCHAR(255) DEFAULT NULL COMMENT '客户特别要求 (如: 只要射手，来声音温柔的)',
 
-  -- 订单状态机
-  `order_status` TINYINT NOT NULL DEFAULT 0 COMMENT '订单状态: 0-待付款 1-待接单 2-服务沟通中 3-申请结单 4-订单已完成 5-已取消 6-已退款',
+  -- 订单履约状态机 (纯业务流)
+  `order_status` TINYINT NOT NULL DEFAULT 0 COMMENT '订单状态: 0-待付款 1-待接单 2-服务沟通中 3-申请结单 4-订单已完成 5-已取消 6-已退款 7-维权争议中 8-仲裁退款完成',
   
-  -- 支付相关
-  `pay_status` TINYINT NOT NULL DEFAULT 0 COMMENT '支付状态：0-未支付 1-已支付 2-已退款',
-  `pay_type` VARCHAR(16) DEFAULT 'mock' COMMENT '支付渠道：mock(模拟支付) / wechat(微信支付)',
-  `transaction_id` VARCHAR(64) DEFAULT NULL COMMENT '支付通道流水单号 (微信支付单号或Mock单号)',
-  `pay_time` DATETIME DEFAULT NULL COMMENT '付款完成时间',
+  -- 履约过程时间与凭证
   `accept_time` DATETIME DEFAULT NULL COMMENT '陪玩师接单时间',
   `complete_time` DATETIME DEFAULT NULL COMMENT '结单完成时间',
-  `settle_time` DATETIME DEFAULT NULL COMMENT '佣金入账钱包时间',
   `finish_screenshot` VARCHAR(512) DEFAULT NULL COMMENT '陪玩师结单凭证/战绩截图',
+
+  -- 售后维权与平台仲裁字段
+  `dispute_reason` VARCHAR(255) DEFAULT NULL COMMENT '买家发起维权争议原因',
+  `dispute_time` DATETIME DEFAULT NULL COMMENT '发起争议维权时间',
+  `dispute_result` VARCHAR(255) DEFAULT NULL COMMENT '平台管理员仲裁处理说明',
 
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -140,15 +140,16 @@ CREATE TABLE `companion_order` (
   KEY `idx_client` (`client_user_id`),
   KEY `idx_companion` (`companion_user_id`),
   KEY `idx_order_status` (`order_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='陪玩预约订单主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='陪玩预约订单主表 (纯业务履约域)';
 
 -- --------------------------------------------------------
--- 6. 订单评价表
+-- 6. 订单评价表 (买家完结后打分评价)
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `order_review`;
 CREATE TABLE `order_review` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '评价ID',
   `order_id` BIGINT NOT NULL COMMENT '关联companion_order表ID',
+  `order_sn` VARCHAR(32) NOT NULL COMMENT '关联业务订单号',
   `client_user_id` BIGINT NOT NULL COMMENT '评价人(客户)',
   `companion_user_id` BIGINT NOT NULL COMMENT '被评价人(陪玩师)',
   `score` TINYINT NOT NULL DEFAULT 5 COMMENT '综合评分 (1-5星)',
@@ -159,6 +160,7 @@ CREATE TABLE `order_review` (
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '评价时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_order_id` (`order_id`),
+  KEY `idx_order_sn` (`order_sn`),
   KEY `idx_companion_user_id` (`companion_user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单评价表';
 
@@ -172,6 +174,7 @@ CREATE TABLE `user_wallet` (
   `balance` INT NOT NULL DEFAULT 0 COMMENT '可提现余额 (单位：分)',
   `frozen_balance` INT NOT NULL DEFAULT 0 COMMENT '提现中冻结金额 (单位：分)',
   `total_income` INT NOT NULL DEFAULT 0 COMMENT '历史累计总收益 (单位：分)',
+  `version` INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号 (并发安全控制)',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
@@ -221,7 +224,7 @@ CREATE TABLE `withdraw_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='提现记录表';
 
 -- --------------------------------------------------------
--- 10. 接单提醒与消息推送日志表 (监控漏单与触达率)
+-- 10. 接单提醒与消息推送日志表 (后期扩展模块：监控漏单与触达率)
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `notice_log`;
 CREATE TABLE `notice_log` (
@@ -268,8 +271,58 @@ CREATE TABLE `sys_config` (
   UNIQUE KEY `uk_config_key` (`config_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台系统全局动态配置表';
 
+-- --------------------------------------------------------
+-- 13. 支付流水事实表 (金融级支付域解耦：承载真实支付事实与通道扣款)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `pay_flow`;
+CREATE TABLE `pay_flow` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `pay_sn` VARCHAR(32) NOT NULL COMMENT '内部支付流水单号 (PAY_xxx)',
+  `order_sn` VARCHAR(32) NOT NULL COMMENT '关联业务订单号',
+  `client_user_id` BIGINT NOT NULL COMMENT '付款人用户ID',
+  `pay_type` VARCHAR(16) NOT NULL DEFAULT 'mock' COMMENT '支付渠道：mock / wechat_pay / alipay',
+  `transaction_id` VARCHAR(64) DEFAULT NULL COMMENT '第三方支付机构流水单号 (微信商户交易单号)',
+  `pay_amount` INT NOT NULL COMMENT '实际付款金额 (单位: 分)',
+  `channel_fee` INT NOT NULL DEFAULT 0 COMMENT '第三方通道手续费扣除 (微信0.6%，单位: 分，支付成功时落盘)',
+  `pay_status` TINYINT NOT NULL DEFAULT 0 COMMENT '支付状态：0-待支付 1-支付成功 2-支付失败 3-已全额退款 4-部分退款',
+  `pay_time` DATETIME DEFAULT NULL COMMENT '支付成功到账时间',
+  `refund_amount` INT DEFAULT 0 COMMENT '已退款金额 (单位: 分)',
+  `refund_channel_fee` INT DEFAULT 0 COMMENT '退款冲正的通道费 (单位: 分)',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_pay_sn` (`pay_sn`),
+  KEY `idx_order_sn` (`order_sn`),
+  KEY `idx_transaction_id` (`transaction_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='支付流水事实表';
+
+-- --------------------------------------------------------
+-- 14. 订单佣金分润清算表 (履约完结时正式生成，绝不早产)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `order_settlement`;
+CREATE TABLE `order_settlement` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `settle_sn` VARCHAR(32) NOT NULL COMMENT '清算流水号 (SETTLE_xxx)',
+  `order_sn` VARCHAR(32) NOT NULL COMMENT '关联业务订单号',
+  `client_user_id` BIGINT NOT NULL COMMENT '客户ID',
+  `companion_user_id` BIGINT NOT NULL COMMENT '陪练师ID',
+  `total_amount` INT NOT NULL COMMENT '订单总交易额 (单位: 分)',
+  `companion_income` INT NOT NULL COMMENT '陪练师最终结算入账所得 (单位: 分)',
+  `platform_gross_fee` INT NOT NULL COMMENT '平台账面毛抽佣 (单位: 分)',
+  `channel_fee` INT NOT NULL DEFAULT 0 COMMENT '扣除的第三方微信通道费 (单位: 分，按0.6%核算)',
+  `platform_net_profit` INT NOT NULL COMMENT '平台真实到手净利润 (单位: 分 = gross_fee - channel_fee)',
+  `fee_payer` TINYINT NOT NULL DEFAULT 1 COMMENT '通道费承担主体：1-平台利润承担 2-陪练师承担 3-买家附加承担',
+  `settle_status` TINYINT NOT NULL DEFAULT 1 COMMENT '清算状态：1-已清算入账 2-已冲正驳回',
+  `settle_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '清算完成时间',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_settle_sn` (`settle_sn`),
+  UNIQUE KEY `uk_settle_order_sn` (`order_sn`),
+  KEY `idx_companion_user_id` (`companion_user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单佣金分润清算表';
+
 -- ========================================================
--- 初始基础数据 (游戏常用分类 + 初始预置账号与陪玩师)
+-- 初始基础数据 (仅保留 6 大游戏品类字典，用户与订单数据全量清空，支持真实微信号扫码注册)
 -- ========================================================
 
 -- 游戏分类字典
@@ -280,30 +333,3 @@ INSERT INTO `game_category` (`id`, `name`, `icon`, `sort`, `is_active`) VALUES
 (4, '无畏契约', 'https://img.icons8.com/color/96/valorant.png', 70, 1),
 (5, '永劫无间', 'https://img.icons8.com/color/96/sword.png', 60, 1),
 (6, '英雄联盟手游', 'https://img.icons8.com/color/96/riot-games.png', 50, 1);
-
--- 初始用户:
--- 10000: 超级管理员 (沉稳帅气电竞管理)
--- 20001: 甜心小鹿 (高颜值甜美东方软妹)
--- 20002: 野王阿肆 (阳光帅气东方野王)
--- 30001: 软妹软糖 (软萌清纯东方萝莉)
-INSERT INTO `sys_user` (`id`, `openid`, `nickname`, `avatar_url`, `phone`, `gender`, `role`, `status`) VALUES
-(10000, 'mock_openid_admin', '平台超级管理员', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80', '13800000000', 1, 9, 1),
-(20001, 'mock_openid_companion_1', '甜心小鹿', 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=300&q=80', '13800000001', 2, 2, 1),
-(20002, 'mock_openid_companion_2', '野王阿肆', 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=300&q=80', '13800000002', 1, 2, 1),
-(30001, 'mock_openid_apply_1', '软妹软糖', 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80', '13800000003', 2, 1, 1);
-
--- 陪玩师档案主表 (音频全面升级为小程序本地原生秒播 MP3)
-INSERT INTO `companion_profile` (`id`, `user_id`, `real_name`, `bio`, `voice_url`, `voice_duration`, `is_online`, `rating`, `order_count`, `audit_status`) VALUES
-(1, 20001, '鹿小甜', '主玩软辅中单，听指挥超温柔，输赢都不压力~', '/static/audio/voice_sweet_girl.mp3', 6, 1, 5.0, 128, 1),
-(2, 20002, '肆阿野', '全能打野带飞上分，控龙抓人意识顶级，稳稳吃分！', '/static/audio/voice_wild_boy.mp3', 4, 1, 4.9, 342, 1),
-(3, 30001, '唐小软', '萌新陪练，主打陪伴和聊天，声音甜甜不发脾气！', '/static/audio/voice_soft_candy.mp3', 2, 0, 5.0, 0, 0);
-
--- 陪玩师技能表 (用于下单选择)
-INSERT INTO `companion_skill` (`id`, `companion_id`, `user_id`, `game_id`, `game_name`, `rank_name`, `rank_img`, `price`, `unit`, `status`) VALUES
-(1, 1, 20001, 1, '王者荣耀', '最强王者 35星', 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80', 2500, '小时', 1),
-(2, 2, 20002, 1, '王者荣耀', '荣耀王者 68星', 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80', 3500, '局', 1),
-(3, 1, 20001, 2, '英雄联盟', '傲世宗师', 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80', 3000, '小时', 1);
-
--- 派单大厅初始公共抢单
-INSERT INTO `companion_order` (`id`, `order_sn`, `client_user_id`, `companion_user_id`, `skill_id`, `game_name`, `unit_price`, `quantity`, `total_amount`, `platform_fee`, `companion_income`, `order_type`, `is_transferred`, `game_server`, `game_account`, `client_remark`, `order_status`, `pay_status`, `pay_type`, `create_time`) VALUES
-(1, '20261016102801992', 10000, NULL, 1, '王者荣耀', 2500, 2, 5000, 500, 4500, 2, 0, '微信大区 / 排位上分', '开黑老板666', '来个厉害的打野或者射手，连胜中勿坑！', 1, 1, 'mock', NOW());

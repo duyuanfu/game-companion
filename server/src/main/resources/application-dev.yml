@@ -10,3 +10,22 @@ spring:
       port: 6379
       database: 0
       timeout: 3000ms
+
+# ============================================================
+# 本地开发环境覆盖配置（仅 dev profile 生效）
+#
+# 【重要】微信密钥等敏感信息请通过环境变量注入，或复制
+#   application-local.yml.example 为 application-local.yml 后本地填写
+#   （application-local.yml 已加入 .gitignore，不会进入版本库）
+#
+#   方式一（推荐）:  PowerShell
+#     $env:WX_MINIAPP_APPID = "wx...."
+#     $env:WX_MINIAPP_SECRET = "...."
+#   方式二:          编辑 application-local.yml
+# ============================================================
+
+platform:
+  # 开发期开启诊断接口与身份切换等特权工具
+  dev-tools-enabled: true
+  # 本地默认使用 mock 支付（免商户号联调）
+  payment-mode: mock

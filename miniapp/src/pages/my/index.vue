@@ -5,7 +5,7 @@
       <image class="avatar" :src="userInfo.avatarUrl || defaultAvatar" />
       <view class="info-content">
         <text class="nickname">{{ userInfo.nickname || '正在同步档案...' }}</text>
-        <view v-if="userInfo.phone" class="phone-tag">
+        <view v-if="userInfo.phone" class="phone-tag" @click="openPhoneModal('修改绑定手机号', '请输入新的11位手机号码用于短信提醒')">
           <text class="phone-text">📱 {{ formatPhone(userInfo.phone) }}</text>
         </view>
         <button 
@@ -45,10 +45,25 @@
       </view>
     </view>
 
-    <!-- 陪玩师进阶入口 (数据库 role 动态分流) -->
+    <!-- 陪玩师进阶入口 (严格排他互斥：普通客户显示去申请，陪玩师及管理员直接展示工作台) -->
     <view class="section-card companion-entry-card">
-      <!-- 场景 A：普通客户 (未入驻) -->
-      <view v-if="userInfo.role === 1" class="entry-row" @click="goToApply">
+      <!-- 场景 A：已是认证陪玩师 (role=2) 或 超级管理员 (role=9) -> 展示独立接单工作台 -->
+      <view v-if="userInfo.role === 2 || userInfo.role === 9" class="entry-row" @click="goToWorkbench">
+        <view class="entry-left">
+          <text class="entry-icon">💼</text>
+          <view class="entry-text">
+            <view class="title-with-dot">
+              <text class="main-title">陪玩师接单工作台</text>
+              <view class="online-dot"></view>
+            </view>
+            <text class="sub-title">接单开关、收益提现与个人接单设置</text>
+          </view>
+        </view>
+        <view class="entry-btn workbench">进入工作台 ›</view>
+      </view>
+
+      <!-- 场景 B：普通客户 (role=1) -> 展示申请成为陪练师 -->
+      <view v-else class="entry-row" @click="goToApply">
         <view class="entry-left">
           <text class="entry-icon">🎙️</text>
           <view class="entry-text">
@@ -57,21 +72,6 @@
           </view>
         </view>
         <view class="entry-btn">去申请 ›</view>
-      </view>
-
-      <!-- 场景 B：认证陪玩师 (数据库审核通过 role=2) -->
-      <view v-else-if="userInfo.role === 2" class="entry-row" @click="goToWorkbench">
-        <view class="entry-left">
-          <text class="entry-icon">💼</text>
-          <view class="entry-text">
-            <view class="title-with-dot">
-              <text class="main-title">陪玩师接单工作台</text>
-              <view class="online-dot"></view>
-            </view>
-            <text class="sub-title">接单开关、抢单广场、收益提现</text>
-          </view>
-        </view>
-        <view class="entry-btn workbench">进入工作台 ›</view>
       </view>
     </view>
 
@@ -95,13 +95,46 @@
       </view>
       <text class="arrow">›</text>
     </view>
+    <!-- 自定义专属精美手机号绑定弹窗 (彻底淘汰微信原生 showModal) -->
+    <view class="custom-modal-mask" v-if="showPhoneModal" @click="closePhoneModal">
+      <view class="custom-modal-card" @click.stop>
+        <view class="modal-title">{{ phoneModalTitle }}</view>
+        <text class="modal-sub-tip">{{ phoneModalTip }}</text>
+        
+        <!-- 类似验证码的11位数字输入框 -->
+        <view class="phone-input-box">
+          <text class="phone-icon">📱</text>
+          <input 
+            class="phone-digit-input" 
+            type="number" 
+            maxlength="11" 
+            v-model="inputPhoneNumber" 
+            placeholder="请输入11位手机号码" 
+          />
+          <text v-if="inputPhoneNumber" class="clear-icon" @click="inputPhoneNumber = ''">✕</text>
+        </view>
+
+        <view class="modal-btn-row">
+          <button class="modal-btn cancel" @click="closePhoneModal">取消</button>
+          <button 
+            class="modal-btn confirm" 
+            :disabled="inputPhoneNumber.length !== 11" 
+            :class="{ active: inputPhoneNumber.length === 11 }"
+            @click="confirmBindManualPhone"
+          >
+            确认绑定
+          </button>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getUserInfoApi, mockSwitchRoleApi, bindPhoneApi, type UserInfo } from '../../api/user';
+import { execSilentLogin } from '../../utils/request';
 
 const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80';
 
@@ -114,6 +147,52 @@ const userInfo = ref<UserInfo>({
   role: 1
 });
 
+const showPhoneModal = ref(false);
+const inputPhoneNumber = ref('');
+const phoneModalTitle = ref('绑定手机号');
+const phoneModalTip = ref('请输入11位手机号码用于接单短信提醒');
+
+function openPhoneModal(title = '绑定手机号', tip = '请输入11位手机号码用于接单短信提醒') {
+  phoneModalTitle.value = title;
+  phoneModalTip.value = tip;
+  inputPhoneNumber.value = '';
+  showPhoneModal.value = true;
+}
+
+function closePhoneModal() {
+  showPhoneModal.value = false;
+  inputPhoneNumber.value = '';
+}
+
+function confirmBindManualPhone() {
+  const phone = inputPhoneNumber.value.trim();
+  if (!/^1\d{10}$/.test(phone)) {
+    uni.showToast({ title: '请输入有效的11位手机号', icon: 'none' });
+    return;
+  }
+  closePhoneModal();
+  ensureUserSession().then(validId => {
+    submitBindPhone('', phone, validId);
+  }).catch(() => {
+    submitBindPhone('', phone);
+  });
+}
+
+function ensureUserSession(): Promise<number> {
+  return new Promise((resolve) => {
+    const cachedId = uni.getStorageSync('currentUserId');
+    if (cachedId && cachedId > 0) {
+      resolve(cachedId);
+      return;
+    }
+    execSilentLogin().then(() => {
+      resolve(uni.getStorageSync('currentUserId') || 0);
+    }).catch(() => {
+      resolve(0);
+    });
+  });
+}
+
 let clickCount = 0;
 let lastClickTime = 0;
 
@@ -125,7 +204,7 @@ function formatPhone(phone: string) {
 // 加载数据库最新真实数据
 function loadUserData() {
   const cachedUserId = uni.getStorageSync('currentUserId');
-  getUserInfoApi(cachedUserId).then(userRes => {
+  getUserInfoApi().then(userRes => {
     if (userRes.data) {
       userInfo.value = userRes.data;
       if (userRes.data.id) {
@@ -138,24 +217,46 @@ function loadUserData() {
 }
 
 function handleGetPhoneNumber(e: any) {
-  const code = e.detail.code;
+  const code = e.detail?.code;
+  const errMsg = e.detail?.errMsg || '';
+  console.log('微信手机号授权回调详情:', e.detail);
+
   if (code) {
-    uni.showLoading({ title: '正在向后端绑定手机号...' });
-    const targetUserId = userInfo.value.id;
-    bindPhoneApi(code, targetUserId).then(res => {
-      uni.hideLoading();
-      uni.showToast({ title: '手机号已成功写入数据库！', icon: 'success' });
-      // 立即刷新前端展示
-      userInfo.value.phone = res.data;
-      // 重新从 MySQL 数据库查询最新数据
-      loadUserData();
-    }).catch(err => {
-      uni.hideLoading();
-      uni.showToast({ title: err.message || '绑定失败', icon: 'none' });
-    });
+    // 微信官方手机号组件验签成功，提交换取/绑定
+    submitBindPhone(code);
   } else {
-    uni.showToast({ title: '已取消微信手机号授权', icon: 'none' });
+    // 微信官方规则：若小程序未完成企业认证或未开通“手机号快速验证组件”，微信会返回 fail no permission
+    // 此时自动无缝切换为手动输入手机号绑定，彻底避免报错阻断流程
+    if (errMsg.includes('no permission') || !errMsg.includes('cancel')) {
+      console.warn('微信手机号组件未开通或无权限，自动切换为手动输入手机号绑定');
+      openPhoneModal('绑定手机号', '请输入11位手机号码用于接单短信提醒');
+    } else {
+      // 用户主动取消授权，提供手动输入兜底
+      uni.showActionSheet({
+        itemList: ['手动输入真实手机号绑定', '暂不绑定'],
+        success: (sheetRes) => {
+          if (sheetRes.tapIndex === 0) {
+            openPhoneModal('绑定手机号', '请输入11位手机号码用于接单短信提醒');
+          }
+        }
+      });
+    }
   }
+}
+
+function submitBindPhone(code: string, directPhone?: string, forcedUserId?: number) {
+  uni.showLoading({ title: '正在绑定手机号...' });
+  const cachedUserId = forcedUserId || uni.getStorageSync('currentUserId');
+  const targetUserId = (userInfo.value.id && userInfo.value.id > 0) ? userInfo.value.id : cachedUserId;
+  bindPhoneApi(code, directPhone).then(res => {
+    uni.hideLoading();
+    uni.showToast({ title: '手机号已成功绑定写入！', icon: 'success' });
+    userInfo.value.phone = res.data;
+    loadUserData();
+  }).catch(err => {
+    uni.hideLoading();
+    uni.showToast({ title: err?.message || '绑定失败，请稍后重试', icon: 'none' });
+  });
 }
 
 function handleVersionClick() {
@@ -175,8 +276,7 @@ function handleVersionClick() {
       content: `检测到当前用户ID为 [${userInfo.value.id || 10000}]，是否向后端发起请求，将其在 MySQL 数据库中的 role 真正修改为 9 (超级管理员)？`,
       success: (res) => {
         if (res.confirm) {
-          const targetId = userInfo.value.id || 10000;
-          mockSwitchRoleApi(targetId, 9).then(() => {
+          mockSwitchRoleApi(9).then(() => {
             userInfo.value.role = 9;
             uni.showToast({ title: '数据库已真正更新为管理员！', icon: 'success' });
           }).catch(err => {
@@ -231,6 +331,13 @@ onMounted(() => {
 
 onShow(() => {
   loadUserData();
+});
+
+onPullDownRefresh(() => {
+  loadUserData();
+  setTimeout(() => {
+    uni.stopPullDownRefresh();
+  }, 600);
 });
 </script>
 
@@ -400,5 +507,98 @@ onShow(() => {
 .admin-txt {
   font-size: 22rpx;
   opacity: 0.9;
+}
+
+/* 自定义优雅手机号弹窗样式 */
+.custom-modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 999;
+}
+.custom-modal-card {
+  width: 620rpx;
+  background: #ffffff;
+  border-radius: 28rpx;
+  padding: 40rpx 36rpx;
+  box-sizing: border-box;
+  box-shadow: 0 20rpx 40rpx rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+.modal-title {
+  font-size: 34rpx;
+  font-weight: bold;
+  color: #111827;
+  margin-bottom: 12rpx;
+}
+.modal-sub-tip {
+  font-size: 24rpx;
+  color: #6b7280;
+  display: block;
+  margin-bottom: 36rpx;
+}
+.phone-input-box {
+  display: flex;
+  align-items: center;
+  background: #f3f4f6;
+  border: 2rpx solid #e5e7eb;
+  border-radius: 20rpx;
+  padding: 18rpx 24rpx;
+  margin-bottom: 40rpx;
+  transition: all 0.2s ease;
+}
+.phone-input-box:focus-within {
+  border-color: #6366f1;
+  background: #ffffff;
+}
+.phone-icon {
+  font-size: 32rpx;
+  margin-right: 16rpx;
+}
+.phone-digit-input {
+  flex: 1;
+  text-align: left;
+  font-size: 34rpx;
+  font-weight: bold;
+  letter-spacing: 2rpx;
+  color: #111827;
+}
+.clear-icon {
+  font-size: 28rpx;
+  color: #9ca3af;
+  padding: 0 10rpx;
+}
+.modal-btn-row {
+  display: flex;
+  gap: 20rpx;
+}
+.modal-btn {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: bold;
+  padding: 16rpx 0;
+  border-radius: 36rpx;
+  margin: 0;
+  line-height: 1.6;
+}
+.modal-btn.cancel {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+.modal-btn.confirm {
+  background: #cbd5e1;
+  color: #ffffff;
+}
+.modal-btn.confirm.active {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #ffffff;
+  box-shadow: 0 8rpx 20rpx rgba(99, 102, 241, 0.3);
 }
 </style>

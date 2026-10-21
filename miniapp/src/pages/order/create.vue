@@ -81,8 +81,8 @@ import { onLoad } from '@dcloudio/uni-app';
 import { createOrderApi } from '../../api/order';
 import { getCompanionSkillsApi, type CompanionSkillItem } from '../../api/companion';
 
-const companionUserId = ref<number>(20001);
-const nickname = ref('甜心小鹿');
+const companionUserId = ref<number>(0);
+const nickname = ref('认证陪练师');
 const selectedSkillId = ref<number>(1);
 const selectedSkillPrice = ref<number>(25);
 const selectedGameName = ref<string>('王者荣耀');
@@ -108,11 +108,7 @@ function loadSkills(userId: number) {
       selectSkill(list[0]);
     }
   }).catch(() => {
-    // 容错兜底
-    skillList.value = [
-      { id: 1, companionId: 1, userId: 20001, gameId: 1, gameName: '王者荣耀', rankName: '最强王者 35星', rankImg: '', price: 2500, unit: '小时', status: 1 },
-      { id: 3, companionId: 1, userId: 20001, gameId: 2, gameName: '英雄联盟', rankName: '傲世宗师', rankImg: '', price: 3000, unit: '小时', status: 1 }
-    ];
+    skillList.value = [];
   });
 }
 

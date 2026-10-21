@@ -49,6 +49,14 @@
         <text class="lbl">预约数量：</text>
         <text class="val">{{ order.quantity }} (局/小时)</text>
       </view>
+      <view class="row" v-if="order.originalAmount && order.originalAmount !== order.totalAmount">
+        <text class="lbl">服务标价：</text>
+        <text class="val">¥{{ ((order.originalAmount || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row" v-if="order.discountAmount && order.discountAmount > 0">
+        <text class="lbl">优惠立减：</text>
+        <text class="val">-¥{{ ((order.discountAmount || 0) / 100).toFixed(2) }}</text>
+      </view>
       <view class="row">
         <text class="lbl">实付总额：</text>
         <text class="val price">¥{{ ((order.totalAmount || 0) / 100).toFixed(2) }}</text>
@@ -56,6 +64,52 @@
       <view class="row" v-if="order.clientRemark">
         <text class="lbl">客户需求：</text>
         <text class="val">{{ order.clientRemark }}</text>
+      </view>
+    </view>
+
+    <!-- 订单分佣清算事实卡片 (解耦自 order_settlement 表，完结后展示) -->
+    <view class="section-card settlement-card" v-if="order.settlement">
+      <view class="card-title">🧾 订单分佣清算对账单 (官方结算)</view>
+      <view class="row">
+        <text class="lbl">清算单号：</text>
+        <text class="val code-sn">{{ order.settlement.settleSn }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">陪练师入账：</text>
+        <text class="val price">¥{{ ((order.settlement.companionIncome || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">平台毛抽佣：</text>
+        <text class="val">¥{{ ((order.settlement.platformGrossFee || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">微信通道成本：</text>
+        <text class="val">-¥{{ ((order.settlement.channelFee || 0) / 100).toFixed(2) }} (0.6%)</text>
+      </view>
+      <view class="row">
+        <text class="lbl">平台净收益：</text>
+        <text class="val highlight">¥{{ ((order.settlement.platformNetProfit || 0) / 100).toFixed(2) }}</text>
+      </view>
+    </view>
+
+    <!-- 退款与仲裁流水卡片 (解耦自 pay_flow 支付流水事实表) -->
+    <view class="section-card refund-card" v-if="order.orderStatus === 6 || order.orderStatus === 8 || (order.payFlow && order.payFlow.payStatus === 3)">
+      <view class="card-title">🧾 退款对账明细 (资金原路退回)</view>
+      <view class="row" v-if="order.payFlow && order.payFlow.paySn">
+        <text class="lbl">支付流水号：</text>
+        <text class="val code-sn">{{ order.payFlow.paySn }}</text>
+      </view>
+      <view class="row">
+        <text class="lbl">退款金额：</text>
+        <text class="val price">¥{{ (((order.payFlow && order.payFlow.refundAmount) || order.totalAmount || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row" v-if="order.payFlow && order.payFlow.refundChannelFee">
+        <text class="lbl">通道费冲正：</text>
+        <text class="val">已全额冲正微信通道费 ¥{{ ((order.payFlow.refundChannelFee || 0) / 100).toFixed(2) }}</text>
+      </view>
+      <view class="row" v-if="order.disputeResult">
+        <text class="lbl">仲裁结果：</text>
+        <text class="val highlight">{{ order.disputeResult }}</text>
       </view>
     </view>
 
@@ -89,6 +143,15 @@
         </button>
       </view>
 
+      <!-- 客户态-服务中，支持发起维权争议 -->
+      <view v-if="order.orderStatus === 2" class="section-card tip-panel">
+        <text class="tip-title">🎮 正在开黑服务中</text>
+        <text class="tip-desc">双方已解锁开黑房间，正在尽情开黑中！如遇陪练失联等问题可申请维权。</text>
+        <button class="dispute-btn" @click="handleApplyDispute">
+          遇到问题？申请平台售后维权
+        </button>
+      </view>
+
       <!-- 客户态-陪练已申请完结，等待客户确认打款 -->
       <view v-else-if="order.orderStatus === 3" class="section-card action-panel client-confirm">
         <view class="card-title">陪玩师已提交战绩结算凭证</view>
@@ -103,6 +166,19 @@
         <button class="confirm-btn" @click="handleConfirmFinish">
           确认服务完成 (佣金入账并打分)
         </button>
+        <button class="dispute-btn secondary" @click="handleApplyDispute">
+          战绩有疑义？申请售后维权
+        </button>
+      </view>
+
+      <!-- 客户态-维权争议中 -->
+      <view v-else-if="order.orderStatus === 7" class="section-card dispute-panel">
+        <view class="card-title">⚠️ 售后维权平台处理中</view>
+        <view class="dispute-info">
+          <text class="lbl">争议原因：</text>
+          <text class="val">{{ order.disputeReason || '客户发起平台维权仲裁' }}</text>
+        </view>
+        <text class="dispute-tip">管理员正在调取开黑聊天记录与双方凭证进行公正仲裁，请耐心等待！</text>
       </view>
 
       <!-- 客户态-已完成：服务评价与打分卡片 -->
@@ -169,7 +245,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { onLoad, onShow, onHide, onUnload, onPullDownRefresh } from '@dcloudio/uni-app';
-import { getOrderDetailApi, applyFinishOrderApi, confirmOrderApi, acceptOrderApi, cancelOrderApi, autoRefundTimeoutApi } from '../../api/order';
+import { getOrderDetailApi, applyFinishOrderApi, confirmOrderApi, acceptOrderApi, cancelOrderApi, autoRefundTimeoutApi, submitReviewApi, getReviewDetailApi, applyDisputeApi } from '../../api/order';
+import { silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const order = ref<any>({
   orderSn: '',
@@ -247,8 +324,37 @@ function toggleTag(tag: string) {
 }
 
 function submitReview() {
-  uni.showToast({ title: '好评提交成功！', icon: 'success' });
-  isReviewed.value = true;
+  submitReviewApi({
+    orderSn: order.value.orderSn,
+    score: reviewScore.value,
+    skillScore: reviewScore.value,
+    attitudeScore: reviewScore.value,
+    tags: selectedTags.value.join(','),
+    content: '服务非常满意！'
+  }).then(() => {
+    uni.showToast({ title: '好评提交成功！', icon: 'success' });
+    isReviewed.value = true;
+  }).catch((err: any) => {
+    uni.showToast({ title: err?.message || '评价提交失败', icon: 'none' });
+  });
+}
+
+function handleApplyDispute() {
+  uni.showModal({
+    title: '申请售后维权',
+    editable: true,
+    placeholderText: '请输入维权原因 (如: 陪练中途掉线未履约)',
+    success: (modalRes) => {
+      if (modalRes.confirm && modalRes.content) {
+        applyDisputeApi(order.value.orderSn, modalRes.content).then(() => {
+          uni.showToast({ title: '维权申请已提交！', icon: 'success' });
+          loadOrderDetail(order.value.orderSn);
+        }).catch((err: any) => {
+          uni.showToast({ title: err?.message || '提交失败', icon: 'none' });
+        });
+      }
+    }
+  });
 }
 
 const roleIdentityTip = computed(() => {
@@ -263,6 +369,9 @@ const orderStatusDesc = computed(() => {
     case 3: return '陪玩师已提交战绩 (待客户确认)';
     case 4: return '订单已圆满完成';
     case 5: return '订单已取消';
+    case 6: return '已全额退款';
+    case 7: return '⚠️ 维权争议中 (平台介入处理中)';
+    case 8: return '维权仲裁退款完成';
     default: return '订单处理中';
   }
 });
@@ -281,6 +390,19 @@ function loadOrderDetail(orderSn: string) {
         startStatusPolling(orderSn);
       } else {
         stopStatusPolling();
+      }
+
+      // 如果订单已完成，主动查询历史评价记录进行真实回显
+      if (order.value.orderStatus === 4) {
+        getReviewDetailApi(orderSn).then((reviewRes: any) => {
+          if (reviewRes.data) {
+            isReviewed.value = true;
+            reviewScore.value = reviewRes.data.score || 5;
+            if (reviewRes.data.tags) {
+              selectedTags.value = reviewRes.data.tags.split(',');
+            }
+          }
+        }).catch(() => {});
       }
     }
   }).catch(err => {
@@ -386,8 +508,9 @@ function enterChat() {
 }
 
 function handleAcceptOrder() {
-  const companionId = order.value.companionUserId || 20001;
-  acceptOrderApi(order.value.orderSn, companionId).then(() => {
+  // 静默为陪练师补充通知配额 (详情页接单手势触发)
+  silentAccumulateSubscribeQuota();
+  acceptOrderApi(order.value.orderSn).then(() => {
     uni.showToast({ title: '接单成功！进入服务中', icon: 'success' });
     loadOrderDetail(order.value.orderSn);
   }).catch(err => {
@@ -402,7 +525,7 @@ function handleCancelOrder() {
     confirmColor: '#ef4444',
     success: (res) => {
       if (res.confirm) {
-        cancelOrderApi(order.value.orderSn, currentUserId.value).then(() => {
+        cancelOrderApi(order.value.orderSn).then(() => {
           uni.showToast({ title: '订单已成功撤回退款！', icon: 'success' });
           loadOrderDetail(order.value.orderSn);
         }).catch(err => {
@@ -414,6 +537,8 @@ function handleCancelOrder() {
 }
 
 function handleUploadScreenshot() {
+  // 静默为陪练师补充通知配额 (上传凭证手势触发)
+  silentAccumulateSubscribeQuota();
   uni.chooseImage({
     count: 1,
     success: (chooseRes) => {
@@ -421,8 +546,7 @@ function handleUploadScreenshot() {
       setTimeout(() => {
         uni.hideLoading();
         const screenshotUrl = chooseRes.tempFilePaths[0];
-        const companionId = order.value.companionUserId || 20001;
-        applyFinishOrderApi(order.value.orderSn, companionId, screenshotUrl).then(() => {
+        applyFinishOrderApi(order.value.orderSn, screenshotUrl).then(() => {
           uni.showToast({ title: '完结凭证已提交', icon: 'success' });
           loadOrderDetail(order.value.orderSn);
         }).catch(err => {
@@ -439,8 +563,7 @@ function handleConfirmFinish() {
     content: '核验战绩截图无误后，点击确定将正式结单，佣金将实时划入陪玩师钱包。',
     success: (modalRes) => {
       if (modalRes.confirm) {
-        const clientId = order.value.clientUserId || 10000;
-        confirmOrderApi(order.value.orderSn, clientId).then(() => {
+        confirmOrderApi(order.value.orderSn).then(() => {
           uni.showToast({ title: '结单完成，祝游戏愉快！', icon: 'success' });
           loadOrderDetail(order.value.orderSn);
         }).catch(err => {

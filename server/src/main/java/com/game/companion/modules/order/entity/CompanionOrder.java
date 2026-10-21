@@ -40,14 +40,14 @@ public class CompanionOrder implements Serializable {
     @Schema(description = "购买数量")
     private Integer quantity;
 
-    @Schema(description = "订单总额 (分)")
+    @Schema(description = "订单标价总额 (分 = 单价 x 数量)")
+    private Integer originalAmount;
+
+    @Schema(description = "优惠立减金额 (分)")
+    private Integer discountAmount;
+
+    @Schema(description = "买家应付/实付总额 (分)")
     private Integer totalAmount;
-
-    @Schema(description = "平台抽佣 (分)")
-    private Integer platformFee;
-
-    @Schema(description = "陪玩师收入 (分)")
-    private Integer companionIncome;
 
     @Schema(description = "订单类型：1-指定陪玩单 2-大厅公共抢单")
     private Integer orderType;
@@ -67,20 +67,8 @@ public class CompanionOrder implements Serializable {
     @Schema(description = "客户需求备注")
     private String clientRemark;
 
-    @Schema(description = "订单状态: 0-待付款 1-待接单 2-服务沟通中 3-申请结单 4-已完成 5-已取消 6-已退款")
+    @Schema(description = "订单履约状态: 0-待付款 1-待接单 2-服务沟通中 3-申请结单 4-已完成 5-已取消 6-已退款 7-维权争议中 8-仲裁退款完成")
     private Integer orderStatus;
-
-    @Schema(description = "支付状态: 0-未支付 1-已支付 2-已退款")
-    private Integer payStatus;
-
-    @Schema(description = "支付方式: mock / wechat")
-    private String payType;
-
-    @Schema(description = "第三方支付流水号")
-    private String transactionId;
-
-    @Schema(description = "付款完成时间")
-    private LocalDateTime payTime;
 
     @Schema(description = "接单时间")
     private LocalDateTime acceptTime;
@@ -88,13 +76,36 @@ public class CompanionOrder implements Serializable {
     @Schema(description = "完结时间")
     private LocalDateTime completeTime;
 
-    @Schema(description = "结算到账时间")
-    private LocalDateTime settleTime;
-
     @Schema(description = "结单战绩截图凭证")
     private String finishScreenshot;
+
+    @Schema(description = "买家发起维权争议原因")
+    private String disputeReason;
+
+    @Schema(description = "发起争议维权时间")
+    private LocalDateTime disputeTime;
+
+    @Schema(description = "平台管理员仲裁处理说明")
+    private String disputeResult;
 
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
+
+    // ================= 领域解耦：非数据库物理字段 (通过关联查询聚合) =================
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "关联的真实支付流水 (来自pay_flow表)")
+    private PayFlow payFlow;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "关联的佣金分润清算事实 (来自order_settlement表)")
+    private OrderSettlement settlement;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "预计/实际陪练师到手收益 (分，动态聚合供前端无缝展示)")
+    private Integer companionIncome;
+
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @Schema(description = "预计/实际平台毛抽佣 (分，动态聚合供前端无缝展示)")
+    private Integer platformFee;
 }

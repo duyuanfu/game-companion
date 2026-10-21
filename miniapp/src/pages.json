@@ -17,13 +17,7 @@
     {
       "path": "pages/my/index",
       "style": {
-        "navigationBarTitleText": "个人中心"
-      }
-    },
-    {
-      "path": "pages/hall/index",
-      "style": {
-        "navigationBarTitleText": "派单广场 - 实时抢单",
+        "navigationBarTitleText": "个人中心",
         "enablePullDownRefresh": true
       }
     },
@@ -36,7 +30,8 @@
     {
       "path": "pages/order/detail",
       "style": {
-        "navigationBarTitleText": "订单详情与服务沟通"
+        "navigationBarTitleText": "订单详情与服务沟通",
+        "enablePullDownRefresh": true
       }
     },
     {
@@ -54,13 +49,15 @@
     {
       "path": "pages/companion/workbench",
       "style": {
-        "navigationBarTitleText": "陪玩师接单工作台"
+        "navigationBarTitleText": "陪玩师接单工作台",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/admin/audit",
       "style": {
-        "navigationBarTitleText": "手机端管理后台"
+        "navigationBarTitleText": "手机端管理后台",
+        "enablePullDownRefresh": true
       }
     }
   ],

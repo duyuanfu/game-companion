@@ -37,6 +37,15 @@ temp/
 tmp/
 .hbuilderx/
 
+# 本地私有配置（严禁进入版本库：内含微信 AppID/Secret、商户密钥等敏感信息）
+server/src/main/resources/application-local.yml
+application-local.yml
+*.local.yml
+
+# 运行时上传的多媒体文件（陪练原声、段位截图、战绩凭证）
+uploads/
+server/uploads/
+
 # 系统临时文件
 .DS_Store
 Thumbs.db

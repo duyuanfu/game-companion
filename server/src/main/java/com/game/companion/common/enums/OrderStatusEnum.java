@@ -12,7 +12,9 @@ public enum OrderStatusEnum {
     APPLIED_FINISH(3, "陪玩师申请完结"),
     FINISHED(4, "订单已完成"),
     CANCELLED(5, "已关闭/取消"),
-    REFUNDED(6, "已退款");
+    REFUNDED(6, "已退款"),
+    DISPUTING(7, "维权争议中"),
+    DISPUTE_REFUNDED(8, "仲裁退款完成");
 
     private final int code;
     private final String desc;

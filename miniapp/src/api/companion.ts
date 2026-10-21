@@ -15,6 +15,7 @@ export interface CompanionItem {
   voiceUrl: string;
   rating: number;
   orderCount: number;
+  reviewCount?: number;
   bio: string;
 }
 
@@ -59,18 +60,48 @@ export function getCompanionsApi(gameName?: string) {
   });
 }
 
-export function getWorkbenchStatsApi(userId?: number) {
-  const query = userId ? `?userId=${userId}` : '';
+/**
+ * 查询「我的」陪玩师工作台数据。
+ * 【安全】查询主体为当前登录用户，后端不再接受 userId 覆盖参数。
+ */
+export function getWorkbenchStatsApi() {
   return request({
-    url: `/companion/workbench/stats${query}`,
+    url: '/companion/workbench/stats',
     method: 'GET'
   });
 }
 
-export function toggleOnlineStatusApi(isOnline: boolean, userId?: number) {
-  const query = userId ? `&userId=${userId}` : '';
+/**
+ * 切换接单状态。
+ */
+export function toggleOnlineStatusApi(isOnline: boolean) {
   return request({
-    url: `/companion/toggle-online?isOnline=${isOnline}${query}`,
+    url: `/companion/toggle-online?isOnline=${isOnline}`,
     method: 'POST'
+  });
+}
+
+/**
+ * 提交入驻申请（支持多游戏与差异化定价）。
+ */
+export function applyCompanionApi(data: {
+  realName: string;
+  phone: string;
+  bio?: string;
+  voiceUrl?: string;
+  voiceDuration?: number;
+  skills: Array<{
+    gameName: string;
+    rankName: string;
+    price: number;
+    priceUnit?: 'YUAN' | 'FEN';
+    unit?: string;
+    rankImg?: string;
+  }>;
+}) {
+  return request({
+    url: '/companion/apply',
+    method: 'POST',
+    data
   });
 }

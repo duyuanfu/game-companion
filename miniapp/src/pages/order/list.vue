@@ -93,9 +93,10 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { onLoad, onShow } from '@dcloudio/uni-app';
+import { onLoad, onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getMyOrdersApi, acceptOrderApi } from '../../api/order';
 import { getUserInfoApi } from '../../api/user';
+import { silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const tabs = [
   { name: '全部', status: -1 },
@@ -112,7 +113,7 @@ const currentRoleType = ref<'client' | 'companion'>('client');
 const currentUser = ref<any>({ id: 0, role: 1 });
 
 const isCompanion = computed(() => {
-  return currentUser.value.role === 2;
+  return currentUser.value.role === 2 || currentUser.value.role === 9;
 });
 
 function getStatusText(status: number) {
@@ -130,14 +131,16 @@ function getStatusText(status: number) {
 function loadOrders() {
   loading.value = true;
   const cachedUserId = uni.getStorageSync('currentUserId');
-  getUserInfoApi(cachedUserId).then(userRes => {
+  const cachedRole = uni.getStorageSync('currentUserRole');
+  // 同步预设视角，避免网络延迟导致以 client 视角错误发出首次请求
+  if (cachedRole === 2) {
+    currentRoleType.value = 'companion';
+  }
+  getUserInfoApi().then(userRes => {
     if (userRes.data) {
       currentUser.value = userRes.data;
-      // 只要当前登录人是认证陪练师 (role = 2)，默认 100% 优先展示她收到的预约接单列表！
       if (currentUser.value.role === 2) {
         currentRoleType.value = 'companion';
-      } else {
-        currentRoleType.value = 'client';
       }
     }
   }).finally(() => {
@@ -150,7 +153,6 @@ function fetchOrderList() {
   getMyOrdersApi({
     roleType: currentRoleType.value,
     orderStatus: activeStatus.value,
-    userId: targetUserId,
     pageNum: 1,
     pageSize: 50
   }).then(res => {
@@ -189,7 +191,9 @@ function goToDetail(orderSn: string) {
 }
 
 function quickAccept(orderSn: string) {
-  acceptOrderApi(orderSn, currentUser.value.id).then(() => {
+  // 静默为陪练师补充通知配额 (高频接单手势触发)
+  silentAccumulateSubscribeQuota();
+  acceptOrderApi(orderSn).then(() => {
     uni.showToast({ title: '接单成功！进入服务中', icon: 'success' });
     fetchOrderList();
     setTimeout(() => {
@@ -216,6 +220,13 @@ onShow(() => {
     uni.removeStorageSync('order_list_filter_status');
   }
   loadOrders();
+});
+
+onPullDownRefresh(() => {
+  loadOrders();
+  setTimeout(() => {
+    uni.stopPullDownRefresh();
+  }, 600);
 });
 </script>
 

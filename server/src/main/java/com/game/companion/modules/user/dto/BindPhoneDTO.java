@@ -8,10 +8,9 @@ import lombok.Data;
 @Schema(description = "微信 getPhoneNumber 手机号一键授权绑定入参")
 public class BindPhoneDTO {
 
-    @NotBlank(message = "微信手机号授权动态 code 不能为空")
-    @Schema(description = "button open-type='getPhoneNumber' 回调事件中的 e.detail.code")
+    @Schema(description = "button open-type='getPhoneNumber' 回调事件中的 e.detail.code (若有)")
     private String code;
 
-    @Schema(description = "备用/透传手机号 (用于开发测试对齐)")
+    @Schema(description = "用户手动输入的真实手机号码 (用于未认证小程序或开发期直绑)")
     private String phone;
 }

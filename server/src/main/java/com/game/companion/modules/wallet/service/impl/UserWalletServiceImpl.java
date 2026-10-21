@@ -61,7 +61,10 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
         wallet.setBalance(beforeBalance - withdrawAmount);
         wallet.setFrozenBalance(wallet.getFrozenBalance() + withdrawAmount);
         wallet.setUpdateTime(LocalDateTime.now());
-        userWalletMapper.updateById(wallet);
+        // 乐观锁：并发更新必须由版本号守护，影响行数为 0 时直接失败，避免余额被覆盖丢失
+        if (userWalletMapper.updateById(wallet) < 1) {
+            throw new ApiException("钱包并发更新冲突（乐观锁校验失败），请稍后重试！");
+        }
 
         // 3. 生成提现流水记录
         String withdrawSn = "TX_" + DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(4);
@@ -132,7 +135,9 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
             // 扣除冻结资金
             wallet.setFrozenBalance(Math.max(0, wallet.getFrozenBalance() - record.getAmount()));
             wallet.setUpdateTime(LocalDateTime.now());
-            userWalletMapper.updateById(wallet);
+            if (userWalletMapper.updateById(wallet) < 1) {
+                throw new ApiException("钱包并发更新冲突（乐观锁校验失败），打款已中断，请重试！");
+            }
 
             // 提现记录状态更新为成功
             record.setStatus(2); // 2-提现成功
@@ -165,7 +170,9 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
             wallet.setFrozenBalance(Math.max(0, wallet.getFrozenBalance() - record.getAmount()));
             wallet.setBalance(beforeBalance + record.getAmount());
             wallet.setUpdateTime(LocalDateTime.now());
-            userWalletMapper.updateById(wallet);
+            if (userWalletMapper.updateById(wallet) < 1) {
+                throw new ApiException("钱包并发更新冲突（乐观锁校验失败），解冻失败，请重试！");
+            }
 
             // 提现记录状态更新为驳回
             record.setStatus(3); // 3-已驳回

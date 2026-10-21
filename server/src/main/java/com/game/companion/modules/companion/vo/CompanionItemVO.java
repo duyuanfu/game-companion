@@ -50,6 +50,9 @@ public class CompanionItemVO {
     @Schema(description = "接单总量")
     private Integer orderCount;
 
+    @Schema(description = "累计真实好评数")
+    private Integer reviewCount;
+
     @Schema(description = "个人简介")
     private String bio;
 

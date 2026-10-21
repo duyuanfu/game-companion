@@ -1,0 +1,34 @@
+# ============================================================
+# 本地私有配置模板
+#
+# 使用方式：复制本文件为 application-local.yml 后填写真实值。
+#   Windows PowerShell:  Copy-Item application-local.yml.example application-local.yml
+#   application-local.yml 已加入 .gitignore，不会进入版本库。
+#
+# 【安全提示】仓库历史中曾出现过明文 AppID/Secret，
+#   上线前请务必在微信公众平台「重置」小程序 AppSecret 并同步更新此处。
+# ============================================================
+
+wx:
+  miniapp:
+    appid: "wxd6d00a7513f90fe9"
+    secret: "0797974b6bc067e1d9a7f04d3dfaa3b6"
+    template-id:
+      new-order: "Hi9R8Rt60xAEsrGEL9RcR-QDs_IeUntIuLSh1YaeUkU"
+
+  pay:
+    mchId: "your-mch-id"
+    apiV3Key: "your-apiv3-key"
+    # 商户私钥 PEM 文本（也可改用 keyPath 指向本地证书文件）
+    keyPath: "classpath:cert/apiclient_key.pem"
+    certPath: "classpath:cert/apiclient_cert.pem"
+    # 支付异步回调地址（需公网可达）
+    notify-url: ""
+    # 商家转账到零钱的经营场景 ID
+    transfer-scene-id: ""
+
+platform:
+  # 本地联调使用 mock 支付；切真实支付改为 wechat
+  payment-mode: mock
+  # 开发期特权工具（诊断接口 / 身份切换）仅在本地开启
+  dev-tools-enabled: true

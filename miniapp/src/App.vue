@@ -1,53 +1,31 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app';
-import { wxSilentLoginApi } from './api/user';
+import { execSilentLogin } from './utils/request';
 import { getMyOrdersApi } from './api/order';
 
 let globalOrderWatcherTimer: any = null;
 let lastKnownPendingCount = 0;
 
 onLaunch(() => {
-  console.log('App Launch: 开黑陪玩小程序初始化');
+  console.log('App Launch: 开黑搭子小程序启动初始化');
   
-  const sysInfo = uni.getSystemInfoSync();
-  const deviceType = sysInfo.platform === 'devtools' ? 'simulator' : 'phone';
-
-  // #ifdef MP-WEIXIN
-  uni.login({
-    provider: 'weixin',
-    success: (res) => {
-      if (res.code) {
-        wxSilentLoginApi(res.code, deviceType).then(loginRes => {
-          uni.setStorageSync('satoken', loginRes.data.token);
-          uni.setStorageSync('currentUserId', loginRes.data.userId);
-          console.log(`【${deviceType === 'simulator' ? '模拟器(客户)' : '真机(陪练师)'}静默登录成功】userId =`, loginRes.data.userId);
-          uni.$emit('user_login_success', loginRes.data);
-
-          // 如果是陪练师，立即启动全局常驻新订单小红点监听守护
-          if (loginRes.data.role === 2) {
-            startGlobalOrderWatcher(loginRes.data.userId);
-          }
-        }).catch(err => {
-          console.error('静默登录接口异常:', err);
-        });
-      }
-    },
-    fail: (err) => {
-      console.warn('uni.login 失败，走开发降级建档:', err);
-      fallbackMockLogin(deviceType);
+  // 启动时直接触发全局无感静默建档登录
+  execSilentLogin().then(() => {
+    const role = uni.getStorageSync('currentUserRole');
+    const userId = uni.getStorageSync('currentUserId');
+    if (role === 2 && userId) {
+      startGlobalOrderWatcher(userId);
     }
+  }).catch(err => {
+    console.warn('初次静默登录排队:', err);
   });
-  // #endif
-
-  // #ifndef MP-WEIXIN
-  fallbackMockLogin(deviceType);
-  // #endif
 });
 
 function fallbackMockLogin(deviceType: string) {
   wxSilentLoginApi('mock_dev_code_default', deviceType).then(loginRes => {
     uni.setStorageSync('satoken', loginRes.data.token);
     uni.setStorageSync('currentUserId', loginRes.data.userId);
+    uni.setStorageSync('currentUserRole', loginRes.data.role);
     console.log(`【开发环境降级建档】userId = ${loginRes.data.userId}`);
     uni.$emit('user_login_success', loginRes.data);
     if (loginRes.data.role === 2) {
@@ -66,7 +44,6 @@ function startGlobalOrderWatcher(companionUserId: number) {
     getMyOrdersApi({
       roleType: 'companion',
       orderStatus: 1, // 查待接单
-      userId: companionUserId,
       pageNum: 1,
       pageSize: 10
     }).then(res => {
@@ -90,13 +67,14 @@ function startGlobalOrderWatcher(companionUserId: number) {
   };
 
   checkPendingOrders();
-  // 每 3 秒全局守护一次
-  globalOrderWatcherTimer = setInterval(checkPendingOrders, 3000);
+  // 保持合理心跳间隔 (5 秒)，既保障来单即时提醒，又减轻网络与控制台压力
+  globalOrderWatcherTimer = setInterval(checkPendingOrders, 5000);
 }
 
 onShow(() => {
   const currentUserId = uni.getStorageSync('currentUserId');
-  if (currentUserId === 20001) {
+  const currentUserRole = uni.getStorageSync('currentUserRole');
+  if (currentUserId && currentUserRole === 2) {
     startGlobalOrderWatcher(currentUserId);
   }
 });

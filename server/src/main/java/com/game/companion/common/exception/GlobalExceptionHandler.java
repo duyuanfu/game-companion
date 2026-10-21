@@ -60,6 +60,12 @@ public class GlobalExceptionHandler {
         return CommonResult.failed(ResultCode.FORBIDDEN);
     }
 
+    @ExceptionHandler(value = org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public CommonResult<Object> handleNoResourceFoundException(org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        log.warn("接口或资源未找到 (404): {}", e.getResourcePath());
+        return CommonResult.failed("未找到请求的接口或资源路径: " + e.getResourcePath());
+    }
+
     @ExceptionHandler(value = Exception.class)
     public CommonResult<Object> handleException(Exception e) {
         log.error("系统未知异常: ", e);

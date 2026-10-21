@@ -10,33 +10,34 @@ export interface WithdrawItem {
   amount: number;
   fee: number;
   actualAmount: number;
-  status: number; // 0-待审 1-打款中 2-成功 3-已驳回
+  status: number; // 0-待审核 1-打款中 2-已成功 3-已驳回
   wechatBatchId?: string;
   failReason?: string;
   createTime: string;
 }
 
-export function applyWithdrawApi(amount: number, realName?: string, userId?: number) {
-  const query = userId ? `?userId=${userId}` : '';
+/**
+ * 申请提现。
+ * 【安全】提现人取自当前登录会话，后端不再接受 userId 覆盖参数。
+ */
+export function applyWithdrawApi(amount: number, realName?: string) {
   return request({
-    url: `/wallet/withdraw/apply${query}`,
+    url: '/wallet/withdraw/apply',
     method: 'POST',
     data: { amount, realName }
   });
 }
 
-export function getMyWithdrawsApi(userId?: number) {
-  const query = userId ? `?userId=${userId}` : '';
+export function getMyWithdrawsApi(pageNum = 1, pageSize = 10) {
   return request<{ records: WithdrawItem[] }>({
-    url: `/wallet/withdraw/my-list${query}`,
+    url: `/wallet/withdraw/my-list?pageNum=${pageNum}&pageSize=${pageSize}`,
     method: 'GET'
   });
 }
 
-export function getMyFlowsApi(userId?: number) {
-  const query = userId ? `?userId=${userId}` : '';
+export function getMyFlowsApi(pageNum = 1, pageSize = 20) {
   return request<{ records: any[] }>({
-    url: `/wallet/flow/my-list${query}`,
+    url: `/wallet/flow/my-list?pageNum=${pageNum}&pageSize=${pageSize}`,
     method: 'GET'
   });
 }

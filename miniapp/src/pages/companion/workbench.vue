@@ -70,16 +70,7 @@
           <text class="arrow">›</text>
         </view>
 
-        <view class="menu-item" @click="goToHall">
-          <view class="menu-left">
-            <text class="menu-icon">⚡️</text>
-            <view class="menu-text">
-              <text class="item-title">派单广场公共抢单</text>
-              <text class="item-desc">抢公共单、快速开黑接单</text>
-            </view>
-          </view>
-          <text class="arrow">›</text>
-        </view>
+        
 
         <view class="menu-item" @click="showSkillSetting">
           <view class="menu-left">
@@ -109,10 +100,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { onShow, onHide, onUnload } from '@dcloudio/uni-app';
+import { onShow, onHide, onUnload, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getWorkbenchStatsApi, toggleOnlineStatusApi } from '../../api/companion';
 import { getMyOrdersApi } from '../../api/order';
 import { applyWithdrawApi } from '../../api/wallet';
+import { guideSubscribeNewOrder, silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const stats = ref<any>({
   isOnline: true,
@@ -133,8 +125,8 @@ let workbenchTimer: any = null;
 let lastKnownBalance = 0;
 
 function loadStats() {
-  const currentUserId = uni.getStorageSync('currentUserId') || 20001;
-  getWorkbenchStatsApi(currentUserId).then(res => {
+  const currentUserId = uni.getStorageSync('currentUserId') || 0;
+  getWorkbenchStatsApi().then(res => {
     if (res.data) {
       const newBalance = res.data.balance || 0;
       if (lastKnownBalance > 0 && newBalance > lastKnownBalance) {
@@ -156,7 +148,6 @@ function loadStats() {
   getMyOrdersApi({
     roleType: 'companion',
     orderStatus: 1,
-    userId: currentUserId,
     pageNum: 1,
     pageSize: 10
   }).then(res => {
@@ -177,6 +168,8 @@ function loadStats() {
 }
 
 function goToPendingOrder() {
+  // 静默为陪练师补充通知配额
+  silentAccumulateSubscribeQuota();
   if (pendingOrders.value.length > 0) {
     const firstOrderSn = pendingOrders.value[0].orderSn;
     uni.navigateTo({
@@ -249,14 +242,18 @@ function handleDirectSubscribe() {
 
 function handleToggleOnline(e: any) {
   const newStatus = e.detail.value;
-  const currentUserId = uni.getStorageSync('currentUserId') || 20001;
+  const currentUserId = uni.getStorageSync('currentUserId') || 0;
 
-  toggleOnlineStatusApi(newStatus, currentUserId).then(() => {
+  toggleOnlineStatusApi(newStatus).then(() => {
     stats.value.isOnline = newStatus;
     uni.showToast({
       title: newStatus ? '接单开启成功' : '已暂停接单',
       icon: 'none'
     });
+    // 当开启接单时，主动引导订阅微信新订单提醒卡片 (提醒用户勾选“总是保持”)
+    if (newStatus) {
+      guideSubscribeNewOrder();
+    }
   }).catch(err => {
     uni.showToast({ title: err.message || '切换失败', icon: 'none' });
   });
@@ -270,7 +267,7 @@ function handleWithdraw() {
   }
 
   const currentBalanceYuan = (currentBalanceFen / 100).toFixed(2);
-  const currentUserId = uni.getStorageSync('currentUserId') || 20001;
+  const currentUserId = uni.getStorageSync('currentUserId') || 0;
 
   uni.showModal({
     title: '申请提现结算',
@@ -280,7 +277,7 @@ function handleWithdraw() {
     success: (res) => {
       if (res.confirm) {
         uni.showLoading({ title: '正在提交提现申请...' });
-        applyWithdrawApi(currentBalanceFen, '甜心小鹿', currentUserId).then(() => {
+        applyWithdrawApi(currentBalanceFen, stats.value.realName || '认证陪练师').then(() => {
           uni.hideLoading();
           uni.showModal({
             title: '提现申请已提交',
@@ -297,10 +294,6 @@ function handleWithdraw() {
       }
     }
   });
-}
-
-function goToHall() {
-  uni.navigateTo({ url: '/pages/hall/index' });
 }
 
 function showSkillSetting() {
@@ -329,6 +322,13 @@ onUnload(() => {
     clearInterval(workbenchTimer);
     workbenchTimer = null;
   }
+});
+
+onPullDownRefresh(() => {
+  loadStats();
+  setTimeout(() => {
+    uni.stopPullDownRefresh();
+  }, 600);
 });
 </script>
 

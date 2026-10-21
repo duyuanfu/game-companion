@@ -38,6 +38,8 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
     private final CompanionSkillMapper companionSkillMapper;
     private final SysUserMapper sysUserMapper;
     private final CompanionOrderMapper companionOrderMapper;
+    private final com.game.companion.modules.order.mapper.PayFlowMapper payFlowMapper;
+    private final com.game.companion.modules.order.mapper.OrderSettlementMapper orderSettlementMapper;
 
     @Override
     public Page<CompanionAuditItemVO> getPendingAudits(int pageNum, int pageSize) {
@@ -70,6 +72,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                     .rankImg(skill != null ? skill.getRankImg() : "")
                     .bio(p.getBio())
                     .applyTime(p.getCreateTime())
+                    .skills(skills)
                     .build();
             voList.add(vo);
         }
@@ -114,16 +117,32 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         LocalDateTime startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
         LocalDateTime endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
 
-        // 真实统计数据库今天生成的订单
-        List<CompanionOrder> todayOrders = companionOrderMapper.selectList(
+        // 1. 真实统计今日生成的业务订单量
+        Long todayOrderCount = companionOrderMapper.selectCount(
                 new LambdaQueryWrapper<CompanionOrder>()
                         .ge(CompanionOrder::getCreateTime, startOfDay)
                         .le(CompanionOrder::getCreateTime, endOfDay)
         );
 
-        int totalCount = todayOrders.size();
-        int totalAmount = todayOrders.stream().mapToInt(CompanionOrder::getTotalAmount).sum();
-        int totalPlatformFee = todayOrders.stream().mapToInt(CompanionOrder::getPlatformFee).sum();
+        // 2. 从支付事实流水表 (pay_flow) 统计今日交易流水与实际发生的手续费
+        List<com.game.companion.modules.order.entity.PayFlow> todayPays = payFlowMapper.selectList(
+                new LambdaQueryWrapper<com.game.companion.modules.order.entity.PayFlow>()
+                        .eq(com.game.companion.modules.order.entity.PayFlow::getPayStatus, 1) // 支付成功
+                        .ge(com.game.companion.modules.order.entity.PayFlow::getPayTime, startOfDay)
+                        .le(com.game.companion.modules.order.entity.PayFlow::getPayTime, endOfDay)
+        );
+        int totalAmount = todayPays.stream().mapToInt(com.game.companion.modules.order.entity.PayFlow::getPayAmount).sum();
+        int totalChannelFee = todayPays.stream().mapToInt(com.game.companion.modules.order.entity.PayFlow::getChannelFee).sum();
+
+        // 3. 从订单清算表 (order_settlement) 统计今日履约完结的真实毛抽成与实际净利润
+        List<com.game.companion.modules.order.entity.OrderSettlement> todaySettlements = orderSettlementMapper.selectList(
+                new LambdaQueryWrapper<com.game.companion.modules.order.entity.OrderSettlement>()
+                        .eq(com.game.companion.modules.order.entity.OrderSettlement::getSettleStatus, 1)
+                        .ge(com.game.companion.modules.order.entity.OrderSettlement::getSettleTime, startOfDay)
+                        .le(com.game.companion.modules.order.entity.OrderSettlement::getSettleTime, endOfDay)
+        );
+        int totalPlatformFee = todaySettlements.stream().mapToInt(com.game.companion.modules.order.entity.OrderSettlement::getPlatformGrossFee).sum();
+        int todayNetProfit = todaySettlements.stream().mapToInt(com.game.companion.modules.order.entity.OrderSettlement::getPlatformNetProfit).sum();
 
         // 统计在线陪玩师数量
         Long onlineCount = companionProfileMapper.selectCount(
@@ -139,9 +158,11 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
         );
 
         return AdminDashboardVO.builder()
-                .todayOrderCount(totalCount)
+                .todayOrderCount(todayOrderCount.intValue())
                 .todayTotalAmount(totalAmount)
                 .todayPlatformFee(totalPlatformFee)
+                .todayChannelFee(totalChannelFee)
+                .todayNetProfit(todayNetProfit)
                 .onlineCompanionCount(onlineCount.intValue())
                 .pendingAuditCount(pendingCount.intValue())
                 .build();

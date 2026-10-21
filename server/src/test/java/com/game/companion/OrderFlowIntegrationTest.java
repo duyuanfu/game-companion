@@ -27,6 +27,11 @@ import com.game.companion.modules.wallet.vo.WithdrawItemVO;
 import com.game.companion.modules.wallet.mapper.UserWalletMapper;
 import com.game.companion.modules.wallet.mapper.WalletFlowMapper;
 import com.game.companion.payment.dto.PaymentResultVO;
+import com.game.companion.modules.order.dto.CreateReviewDTO;
+import com.game.companion.modules.order.entity.OrderReview;
+import com.game.companion.modules.order.service.OrderReviewService;
+import com.game.companion.modules.companion.entity.CompanionProfile;
+import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -69,8 +74,24 @@ public class OrderFlowIntegrationTest {
     @Autowired
     private PlatformConfigService platformConfigService;
 
+    @Autowired
+    private OrderReviewService orderReviewService;
+
+    @Autowired
+    private CompanionProfileMapper companionProfileMapper;
+
+    @Autowired
+    private com.game.companion.modules.order.mapper.PayFlowMapper payFlowMapper;
+
+    @Autowired
+    private com.game.companion.modules.order.mapper.OrderSettlementMapper orderSettlementMapper;
+
+    @Autowired
+    private com.game.companion.modules.order.mapper.CompanionOrderMapper companionOrderMapper;
+
     private static Long clientUserId;
-    private static Long companionUserId = 20001L; // 甜心小鹿固定ID
+    private static Long companionUserId;
+    private static Long testSkillId;
     private static String createdOrderSn;
 
     @BeforeAll
@@ -98,6 +119,81 @@ public class OrderFlowIntegrationTest {
                     "`update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP," +
                     "UNIQUE KEY `uk_config_key` (`config_key`)" +
                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+            // 自动建表：order_review (评价表)
+            stmt.execute("CREATE TABLE IF NOT EXISTS `order_review` (" +
+                    "`id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+                    "`order_id` BIGINT NOT NULL," +
+                    "`order_sn` VARCHAR(32) NOT NULL," +
+                    "`client_user_id` BIGINT NOT NULL," +
+                    "`companion_user_id` BIGINT NOT NULL," +
+                    "`score` TINYINT NOT NULL DEFAULT 5," +
+                    "`skill_score` TINYINT DEFAULT 5," +
+                    "`attitude_score` TINYINT DEFAULT 5," +
+                    "`tags` VARCHAR(255) DEFAULT NULL," +
+                    "`content` VARCHAR(500) DEFAULT NULL," +
+                    "`create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                    "UNIQUE KEY `uk_order_id` (`order_id`)," +
+                    "KEY `idx_order_sn` (`order_sn`)," +
+                    "KEY `idx_companion_user_id` (`companion_user_id`)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            try { stmt.execute("ALTER TABLE `order_review` ADD COLUMN `order_sn` VARCHAR(32) DEFAULT NULL;"); } catch (Exception ignored) {}
+
+            // 自动建表：pay_flow (支付事实流水表)
+            stmt.execute("CREATE TABLE IF NOT EXISTS `pay_flow` (" +
+                    "`id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+                    "`pay_sn` VARCHAR(32) NOT NULL," +
+                    "`order_sn` VARCHAR(32) NOT NULL," +
+                    "`client_user_id` BIGINT NOT NULL," +
+                    "`pay_type` VARCHAR(16) NOT NULL DEFAULT 'mock'," +
+                    "`transaction_id` VARCHAR(64) DEFAULT NULL," +
+                    "`pay_amount` INT NOT NULL," +
+                    "`channel_fee` INT NOT NULL DEFAULT 0," +
+                    "`pay_status` TINYINT NOT NULL DEFAULT 0," +
+                    "`pay_time` DATETIME DEFAULT NULL," +
+                    "`refund_amount` INT DEFAULT 0," +
+                    "`refund_channel_fee` INT DEFAULT 0," +
+                    "`create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                    "`update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP," +
+                    "UNIQUE KEY `uk_pay_sn` (`pay_sn`)," +
+                    "KEY `idx_order_sn` (`order_sn`)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+            // 自动建表：order_settlement (订单佣金分润清算表)
+            stmt.execute("CREATE TABLE IF NOT EXISTS `order_settlement` (" +
+                    "`id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+                    "`settle_sn` VARCHAR(32) NOT NULL," +
+                    "`order_sn` VARCHAR(32) NOT NULL," +
+                    "`client_user_id` BIGINT NOT NULL," +
+                    "`companion_user_id` BIGINT NOT NULL," +
+                    "`total_amount` INT NOT NULL," +
+                    "`companion_income` INT NOT NULL," +
+                    "`platform_gross_fee` INT NOT NULL," +
+                    "`channel_fee` INT NOT NULL DEFAULT 0," +
+                    "`platform_net_profit` INT NOT NULL," +
+                    "`fee_payer` TINYINT NOT NULL DEFAULT 1," +
+                    "`settle_status` TINYINT NOT NULL DEFAULT 1," +
+                    "`settle_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                    "`create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                    "UNIQUE KEY `uk_settle_sn` (`settle_sn`)," +
+                    "UNIQUE KEY `uk_settle_order_sn` (`order_sn`)," +
+                    "KEY `idx_companion_user_id` (`companion_user_id`)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+
+            // 自动为 companion_order 补充交易价格分层、退款流水物理字段与维权仲裁字段及微信通道费字段
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `original_amount` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `discount_amount` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `channel_fee` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `refund_sn` VARCHAR(32) DEFAULT NULL;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `refund_amount` INT DEFAULT 0;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `refund_time` DATETIME DEFAULT NULL;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `refund_reason` VARCHAR(255) DEFAULT NULL;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `dispute_reason` VARCHAR(255) DEFAULT NULL;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `dispute_time` DATETIME DEFAULT NULL;"); } catch (Exception ignored) {}
+            try { stmt.execute("ALTER TABLE `companion_order` ADD COLUMN `dispute_result` VARCHAR(255) DEFAULT NULL;"); } catch (Exception ignored) {}
+
+            // 自动为 user_wallet 补充 version 乐观锁并发安全字段
+            try { stmt.execute("ALTER TABLE `user_wallet` ADD COLUMN `version` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
         } catch (Exception e) {
             System.err.println("初始化表异常: " + e.getMessage());
         }
@@ -128,17 +224,58 @@ public class OrderFlowIntegrationTest {
         assertEquals(RoleEnum.CLIENT.getCode(), clientVO.getRole(), "模拟器端必须是点单客户角色(role=1)");
         System.out.println("✅ 模拟器客户登录测试通过: userId = " + clientUserId + ", role = " + clientVO.getRole());
 
-        // 2. 测试真机端 (手机微信) -> 必须被识别为【陪玩师 甜心小鹿 (role = 2, ID = 20001)】
+        // 2. 测试真机端第二个微信号登录 -> 独立建档并申请成为陪练师
         WxLoginDTO phoneDto = new WxLoginDTO();
         phoneDto.setCode("mock_code_phone_companion");
         phoneDto.setDeviceType("phone");
         UserLoginVO companionVO = userService.wxSilentLogin(phoneDto);
 
         assertNotNull(companionVO);
-        assertEquals(20001L, companionVO.getUserId(), "真机端必须绑定甜心小鹿(ID=20001)");
-        assertEquals(RoleEnum.COMPANION.getCode(), companionVO.getRole(), "真机端角色必须是陪玩师(role=2)");
-        assertEquals("甜心小鹿", companionVO.getNickname(), "真机端昵称必须是甜心小鹿");
-        System.out.println("✅ 真机陪练师登录测试通过: userId = " + companionVO.getUserId() + ", 昵称 = " + companionVO.getNickname());
+        assertNotNull(companionVO.getUserId());
+        companionUserId = companionVO.getUserId();
+
+        // 模拟该微信号在小程序提交入驻申请 (同时申报王者荣耀与英雄联盟 2 个游戏项目)
+        com.game.companion.modules.companion.dto.ApplyCompanionDTO applyDTO = new com.game.companion.modules.companion.dto.ApplyCompanionDTO();
+        applyDTO.setRealName("甜心小鹿");
+        applyDTO.setPhone("13800000001");
+        applyDTO.setBio("主玩软辅中单，听指挥超温柔，输赢都不压力~");
+        applyDTO.setVoiceUrl("/static/audio/voice_sweet_girl.mp3");
+        applyDTO.setVoiceDuration(6);
+
+        var s1 = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        s1.setGameName("王者荣耀");
+        s1.setRankName("最强王者 35星");
+        s1.setPrice(25);
+        s1.setUnit("小时");
+        s1.setRankImg("https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80");
+
+        var s2 = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        s2.setGameName("英雄联盟");
+        s2.setRankName("傲世宗师");
+        s2.setPrice(30);
+        s2.setUnit("小时");
+        s2.setRankImg("https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80");
+
+        applyDTO.setSkills(java.util.List.of(s1, s2));
+        companionService.applyCompanion(companionUserId, applyDTO);
+
+        // 管理员一键审核通过该陪练申请
+        SysUser compUser = userService.getById(companionUserId);
+        compUser.setRole(RoleEnum.COMPANION.getCode());
+        userService.updateById(compUser);
+
+        CompanionProfile compProfile = companionProfileMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CompanionProfile>()
+                        .eq(CompanionProfile::getUserId, companionUserId)
+        );
+        compProfile.setAuditStatus(1);
+        companionProfileMapper.updateById(compProfile);
+
+        var skills = companionService.getCompanionSkills(companionUserId);
+        assertFalse(skills.isEmpty());
+        testSkillId = skills.get(0).getId();
+
+        System.out.println("✅ 真机微信号独立建档并通过陪练资质审核: userId = " + companionUserId + ", 支持游戏数 = " + skills.size());
     }
 
     @Test
@@ -149,7 +286,7 @@ public class OrderFlowIntegrationTest {
         // 模拟甜心小鹿 (20001) 尝试下单预约自己 (20001)
         CreateOrderDTO selfOrderDTO = new CreateOrderDTO();
         selfOrderDTO.setCompanionUserId(companionUserId);
-        selfOrderDTO.setSkillId(1L);
+        selfOrderDTO.setSkillId(testSkillId);
         selfOrderDTO.setQuantity(1);
         selfOrderDTO.setGameServer("微信区");
         selfOrderDTO.setGameAccount("甜心小鹿自己");
@@ -171,7 +308,7 @@ public class OrderFlowIntegrationTest {
         // 1. 客户 (clientUserId) 向 甜心小鹿 (20001) 下单
         CreateOrderDTO orderDTO = new CreateOrderDTO();
         orderDTO.setCompanionUserId(companionUserId);
-        orderDTO.setSkillId(1L);
+        orderDTO.setSkillId(testSkillId);
         orderDTO.setQuantity(2);
         orderDTO.setGameServer("王者荣耀 微信区 / 排位赛");
         orderDTO.setGameAccount("测试老板666");
@@ -183,12 +320,31 @@ public class OrderFlowIntegrationTest {
         createdOrderSn = payResult.getOrderSn();
         System.out.println("✅ 客户下单支付成功: orderSn = " + createdOrderSn);
 
-        // 查验数据库里的订单真实状态
+        // 查验数据库里的订单真实状态 (纯业务交易履约域)
         CompanionOrder dbOrder = companionOrderService.getOrderDetail(createdOrderSn);
         assertNotNull(dbOrder);
         assertEquals(clientUserId, dbOrder.getClientUserId(), "订单的客户ID必须与下单人匹配");
         assertEquals(companionUserId, dbOrder.getCompanionUserId(), "订单的目标陪玩师ID必须是 20001 (甜心小鹿)");
         assertEquals(OrderStatusEnum.PAID_WAIT_ACCEPT.getCode(), dbOrder.getOrderStatus(), "新下单支付后状态必须为【待接单(1)】");
+
+        // 核心财务分层断言：订单主表仅保留标价、优惠与应付实付
+        assertEquals(5000, dbOrder.getOriginalAmount(), "标价必须为 5000分");
+        assertEquals(0, dbOrder.getDiscountAmount(), "优惠立减默认 0分");
+        assertEquals(5000, dbOrder.getTotalAmount(), "买家实付款必须为 5000分");
+
+        // 【金融域解耦断言】验证支付事实流水表 (pay_flow) 真实写入事实数据 (0.6%通道费由此承载)
+        int expectedChannelFee = (int) Math.round(dbOrder.getTotalAmount() * 0.006);
+        com.game.companion.modules.order.entity.PayFlow payFlow = payFlowMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.order.entity.PayFlow>()
+                        .eq(com.game.companion.modules.order.entity.PayFlow::getOrderSn, createdOrderSn)
+        );
+        assertNotNull(payFlow, "支付成功后必须在 pay_flow 支付事实流水表生成记录！");
+        assertEquals(dbOrder.getTotalAmount(), payFlow.getPayAmount(), "支付流水实付金额必须等于订单总金额");
+        assertEquals(expectedChannelFee, payFlow.getChannelFee(), "支付流水通道扣费必须真实记录为 30分");
+        assertEquals(1, payFlow.getPayStatus(), "支付状态必须为成功(1)");
+
+        System.out.println("✅ 订单业务域与支付流水域解耦验证通过: 订单标价=" + dbOrder.getOriginalAmount() + "分, 买家实付=" 
+                + dbOrder.getTotalAmount() + "分, pay_flow 支付流水扣减通道费=" + payFlow.getChannelFee() + "分");
 
         // 2. 🌟 关键断言 (用户痛点)：甜心小鹿 (20001) 查询自己收到的待接单列表！
         Page<CompanionOrder> companionPage = companionOrderService.getMyOrders(
@@ -251,7 +407,44 @@ public class OrderFlowIntegrationTest {
         );
         assertTrue(flowCount > 0, "必须生成对应的钱包收益对账明细流水");
 
-        System.out.println("✅ 客户确认结单成功，甜心小鹿钱包真实入账: " + wallet.getBalance() + "分, 流水记录生成完毕！");
+        // 4. 【业务联动新特性】客户对已完结订单提交 5 星评价，验证评价真实入库且陪练师综合评分更新！
+        CreateReviewDTO reviewDTO = new CreateReviewDTO();
+        reviewDTO.setOrderSn(createdOrderSn);
+        reviewDTO.setScore(5);
+        reviewDTO.setSkillScore(5);
+        reviewDTO.setAttitudeScore(5);
+        reviewDTO.setTags("声音超甜,意识顶级,带飞吃分");
+        reviewDTO.setContent("小姐姐声音太甜了，打野节奏无敌，稳稳吃分！");
+
+        Long reviewId = orderReviewService.createReview(clientUserId, reviewDTO);
+        assertNotNull(reviewId, "评价必须成功生成ID");
+
+        OrderReview dbReview = orderReviewService.getReviewByOrderSn(createdOrderSn);
+        assertNotNull(dbReview, "必须能从 order_review 表中查询到真实评价");
+        assertEquals(5, dbReview.getScore());
+        assertEquals("声音超甜,意识顶级,带飞吃分", dbReview.getTags());
+
+        // 验证陪练师 profile 评分真实计算联动
+        CompanionProfile profile = companionProfileMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CompanionProfile>()
+                        .eq(CompanionProfile::getUserId, companionUserId)
+        );
+        assertNotNull(profile);
+        assertNotNull(profile.getRating(), "陪练师综合评分必须不为空");
+
+        // 【清算域解耦断言】验证订单完结清算单 (order_settlement) 真实生成且无早产
+        com.game.companion.modules.order.entity.OrderSettlement settlement = orderSettlementMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.order.entity.OrderSettlement>()
+                        .eq(com.game.companion.modules.order.entity.OrderSettlement::getOrderSn, createdOrderSn)
+        );
+        assertNotNull(settlement, "完结打款时必须在 order_settlement 生成正式分佣清算事实！");
+        assertEquals(orderFinished.getTotalAmount(), settlement.getTotalAmount());
+        assertEquals(4500, settlement.getCompanionIncome(), "陪练师分成收益必须为 4500分 (90%)");
+        assertEquals(500, settlement.getPlatformGrossFee(), "平台毛抽佣必须为 500分 (10%)");
+        assertEquals(30, settlement.getChannelFee(), "微信通道扣款必须为 30分 (0.6%)");
+        assertEquals(470, settlement.getPlatformNetProfit(), "平台真实净利润必须严格等于 500 - 30 = 470分！");
+
+        System.out.println("✅ 客户确认结单成功，甜心小鹿钱包真实入账: " + wallet.getBalance() + "分, 评价成功写入且清算对账单生成！平台净利: " + settlement.getPlatformNetProfit() + "分");
     }
 
     @Test
@@ -262,7 +455,7 @@ public class OrderFlowIntegrationTest {
         // 1. 客户重新下一笔单
         CreateOrderDTO orderDTO = new CreateOrderDTO();
         orderDTO.setCompanionUserId(companionUserId);
-        orderDTO.setSkillId(1L);
+        orderDTO.setSkillId(testSkillId);
         orderDTO.setQuantity(1);
         orderDTO.setGameServer("微信区");
         orderDTO.setGameAccount("临时有事的老板");
@@ -277,8 +470,18 @@ public class OrderFlowIntegrationTest {
         CompanionOrder cancelledOrder = companionOrderService.getOrderDetail(cancelOrderSn);
 
         assertEquals(OrderStatusEnum.REFUNDED.getCode(), cancelledOrder.getOrderStatus(), "撤单后状态必须流转为【已退款(6)】");
-        assertEquals(2, cancelledOrder.getPayStatus(), "支付状态必须标记为【已退款(2)】");
-        System.out.println("✅ 客户撤单并全额退款成功: orderSn = " + cancelOrderSn + ", 状态: 已退款(6)");
+
+        // 【支付流水退款冲正断言】验证退款事实与通道费冲正由 pay_flow 全权承载
+        com.game.companion.modules.order.entity.PayFlow cancelPayFlow = payFlowMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.order.entity.PayFlow>()
+                        .eq(com.game.companion.modules.order.entity.PayFlow::getOrderSn, cancelOrderSn)
+        );
+        assertNotNull(cancelPayFlow, "支付流水记录必须存在");
+        assertEquals(3, cancelPayFlow.getPayStatus(), "退款后支付流水状态必须标记为已退款(3)");
+        assertEquals(cancelledOrder.getTotalAmount(), cancelPayFlow.getRefundAmount(), "退款金额必须准确记录在流水表");
+        assertEquals(cancelPayFlow.getChannelFee(), cancelPayFlow.getRefundChannelFee(), "退款必须全额冲正通道费");
+
+        System.out.println("✅ 客户撤单并全额退款成功: orderSn = " + cancelOrderSn + ", pay_flow 支付事实与退款冲正完全解耦通过！");
     }
 
     @Test
@@ -334,41 +537,45 @@ public class OrderFlowIntegrationTest {
 
     @Test
     @Order(8)
-    public void test8_AddOnOrderTest() {
-        System.out.println("\n========== [单元测试 8: 开黑聊天室一键加钟续单测试] ==========");
+    public void test8_AddOnOrderExtensionAndDisputeFlow() {
+        System.out.println("\n========== [单元测试 8: 加钟扩展架构保护 & 售后维权与平台仲裁全链路流转测试] ==========");
 
         // 1. 下单并接单进入服务中 (orderStatus = 2)
         CreateOrderDTO orderDTO = new CreateOrderDTO();
         orderDTO.setCompanionUserId(companionUserId);
-        orderDTO.setSkillId(1L); // 王者荣耀 2500分
+        orderDTO.setSkillId(testSkillId); // 王者荣耀 2500分
         orderDTO.setQuantity(1);
         orderDTO.setGameServer("微信区");
-        orderDTO.setGameAccount("加钟老板");
-        orderDTO.setClientRemark("先打一局，打爽了加钟");
+        orderDTO.setGameAccount("维权测试老板");
+        orderDTO.setClientRemark("测试服务争议仲裁流程");
 
         PaymentResultVO payResult = companionOrderService.createAndPayOrder(clientUserId, orderDTO);
-        String addOrderSn = payResult.getOrderSn();
-        companionOrderService.acceptOrder(companionUserId, addOrderSn);
+        String testOrderSn = payResult.getOrderSn();
+        companionOrderService.acceptOrder(companionUserId, testOrderSn);
 
-        CompanionOrder beforeOrder = companionOrderService.getOrderDetail(addOrderSn);
-        assertEquals(1, beforeOrder.getQuantity());
-        assertEquals(2500, beforeOrder.getTotalAmount());
+        // 2. 验证加钟续单接口已进入解耦扩展模式 (正确返回升级维护友好提示)
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.addOnOrder(clientUserId, testOrderSn, 1);
+        }, "加钟续单原直接修改主订单逻辑必须下线，并留好独立子订单扩展切入点！");
+        System.out.println("✅ 加钟功能解耦保护生效，原主订单未受脏写污染！");
 
-        // 2. 客户在聊天室点击【一键加钟 +1小时】
-        PaymentResultVO addOnResult = companionOrderService.addOnOrder(clientUserId, addOrderSn, 1);
-        assertNotNull(addOnResult);
+        // 3. 客户在服务中遇到异常情况，发起【售后维权与平台争议仲裁】
+        companionOrderService.applyDispute(clientUserId, testOrderSn, "陪练中途掉线超过半小时，未履行约定服务");
+        CompanionOrder disputeOrder = companionOrderService.getOrderDetail(testOrderSn);
+        assertEquals(OrderStatusEnum.DISPUTING.getCode(), disputeOrder.getOrderStatus(), "发起维权后状态必须为【维权争议中(7)】");
+        assertEquals("陪练中途掉线超过半小时，未履行约定服务", disputeOrder.getDisputeReason());
+        assertNotNull(disputeOrder.getDisputeTime());
+        System.out.println("✅ 客户发起维权申请成功，订单状态流转为: 维权争议中(7)");
 
-        CompanionOrder afterOrder = companionOrderService.getOrderDetail(addOrderSn);
-        assertEquals(2, afterOrder.getQuantity(), "加钟后预约数量必须累加为 2");
-        assertEquals(5000, afterOrder.getTotalAmount(), "加钟后总金额必须更新为 5000分 (50.00元)");
-        assertEquals(4500, afterOrder.getCompanionIncome(), "加钟后陪练师结算收入必须更新为 4500分 (45.00元)");
+        // 4. 管理员介入仲裁，核实后支持客户退款
+        companionOrderService.auditDispute(10000L, testOrderSn, true, "核实陪练网络掉线属实，予以全额退款");
+        CompanionOrder arbitratedOrder = companionOrderService.getOrderDetail(testOrderSn);
+        assertEquals(OrderStatusEnum.DISPUTE_REFUNDED.getCode(), arbitratedOrder.getOrderStatus(), "仲裁退款后状态为【仲裁退款完成(8)】");
+        assertTrue(arbitratedOrder.getDisputeResult().contains("全额退款"), "仲裁说明必须记录在案");
+        assertNotNull(arbitratedOrder.getPayFlow(), "必须关联挂载支付流水");
+        assertEquals(3, arbitratedOrder.getPayFlow().getPayStatus(), "支付流水标记为退款");
 
-        // 3. 验证聊天室是否自动广播了系统加钟消息
-        var chatList = chatMessageService.getOrderMessages(addOrderSn);
-        assertFalse(chatList.isEmpty(), "聊天室内必须包含系统加钟广播消息");
-        assertTrue(chatList.get(0).getContent().contains("老板刚刚成功加钟续费"), "消息正文必须包含加钟广播提示");
-
-        System.out.println("✅ 一键加钟测试通过: 原单价25元(1小时) -> 加钟1小时 -> 累计50元(2小时)，系统广播入库成功！");
+        System.out.println("✅ 平台管理员维权仲裁并全额退款完成！支付流水冲正成功, 仲裁结果: " + arbitratedOrder.getDisputeResult());
     }
 
     @Test
@@ -379,7 +586,7 @@ public class OrderFlowIntegrationTest {
         // 1. 客户下单待接单
         CreateOrderDTO orderDTO = new CreateOrderDTO();
         orderDTO.setCompanionUserId(companionUserId);
-        orderDTO.setSkillId(1L);
+        orderDTO.setSkillId(testSkillId);
         orderDTO.setQuantity(2);
         orderDTO.setGameServer("微信区");
         orderDTO.setGameAccount("等待超时的老板");
@@ -388,15 +595,25 @@ public class OrderFlowIntegrationTest {
         PaymentResultVO payResult = companionOrderService.createAndPayOrder(clientUserId, orderDTO);
         String timeoutSn = payResult.getOrderSn();
 
-        // 2. 触发超时自动退款检测
+        // 2. 【超时判定必须是时间感知的】刚下单的订单尚未超时，绝不能被误退款
+        assertFalse(companionOrderService.checkAndRefundIfTimeout(timeoutSn),
+                "未到 10 分钟超时的订单绝不允许触发自动退款！");
+
+        // 3. 模拟「下单已超过 10 分钟」：回填下单时间为 11 分钟前
+        CompanionOrder timeoutOrder = companionOrderService.getOrderDetail(timeoutSn);
+        timeoutOrder.setCreateTime(java.time.LocalDateTime.now().minusMinutes(11));
+        companionOrderMapper.updateById(timeoutOrder);
+
+        // 4. 触发超时自动退款检测
         boolean isRefunded = companionOrderService.checkAndRefundIfTimeout(timeoutSn);
         assertTrue(isRefunded, "接单超时必须成功执行自动退款");
 
         CompanionOrder refundedOrder = companionOrderService.getOrderDetail(timeoutSn);
         assertEquals(OrderStatusEnum.REFUNDED.getCode(), refundedOrder.getOrderStatus(), "超时后订单状态必须流转为【已退款(6)】");
-        assertEquals(2, refundedOrder.getPayStatus(), "支付状态必须标记为【已退款(2)】");
+        assertNotNull(refundedOrder.getPayFlow(), "订单详情必须挂载关联支付流水事实");
+        assertEquals(3, refundedOrder.getPayFlow().getPayStatus(), "超时后支付流水必须标记为已退款(3)");
 
-        System.out.println("✅ 10分钟接单超时自动全额退款测试通过！单号: " + timeoutSn + ", 退款状态: 已退款(6)");
+        System.out.println("✅ 10分钟接单超时自动全额退款测试通过！单号: " + timeoutSn + ", 支付流水退款冲正完成！");
     }
 
     @Test
@@ -497,5 +714,119 @@ public class OrderFlowIntegrationTest {
         assertEquals("1688888888", readConfig.getMchId(), "商户号 MchId 必须成功热更新");
 
         System.out.println("✅ 管理员手机端微信支付与运营参数热配置保存与读取测试完全通过！无需重启服务！");
+    }
+
+    /**
+     * 【单元测试 12】订单状态机与越权访问双重防护
+     */
+    @Test
+    @Order(12)
+    public void test12_OrderStateMachineAndAuthorizationGuard() {
+        System.out.println("\n========== [单元测试 12: 订单状态机校验与越权访问拦截测试] ==========");
+
+        // 1. 正常下单（指定陪练师）
+        CreateOrderDTO orderDTO = new CreateOrderDTO();
+        orderDTO.setCompanionUserId(companionUserId);
+        orderDTO.setSkillId(testSkillId);
+        orderDTO.setQuantity(1);
+        orderDTO.setGameServer("微信区");
+        orderDTO.setGameAccount("状态机测试账号");
+        PaymentResultVO payResult = companionOrderService.createAndPayOrder(clientUserId, orderDTO);
+        String orderSn = payResult.getOrderSn();
+
+        // 2. 【状态机】订单尚处于「待接单(1)」时，陪玩师不得直接申请结单
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.applyFinish(companionUserId, orderSn, "/uploads/screenshot.png");
+        }, "未进入服务中的订单绝不允许申请结单！");
+
+        // 3. 【状态机】订单尚未接单时，客户不得直接确认打款（防止未履约先结算）
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.confirmFinish(clientUserId, orderSn);
+        }, "未申请完结的订单绝不允许确认打款！");
+
+        // 4. 【越权】第三方用户（非下单客户）不得代客户确认结单
+        WxLoginDTO intruderDto = new WxLoginDTO();
+        intruderDto.setCode("mock_code_simulator_intruder");
+        intruderDto.setDeviceType("simulator");
+        UserLoginVO intruderVO = userService.wxSilentLogin(intruderDto);
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.confirmFinish(intruderVO.getUserId(), orderSn);
+        }, "非下单客户绝不允许代为确认结单！");
+
+        // 5. 【越权】第三方用户不得替陪玩师接单
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.acceptOrder(intruderVO.getUserId(), orderSn);
+        }, "非指定陪玩师绝不允许接单！");
+
+        // 6. 正常履约：接单 -> 申请结单 -> 客户确认打款
+        companionOrderService.acceptOrder(companionUserId, orderSn);
+        companionOrderService.applyFinish(companionUserId, orderSn, "/uploads/screenshot.png");
+        companionOrderService.confirmFinish(clientUserId, orderSn);
+
+        CompanionOrder finished = companionOrderService.getOrderDetail(orderSn);
+        assertEquals(OrderStatusEnum.FINISHED.getCode(), finished.getOrderStatus(), "正常履约后必须流转为已完成(4)");
+        assertNotNull(finished.getSettlement(), "完结必须生成佣金清算单");
+
+        // 7. 【幂等】重复确认结单必须被拦截，绝不允许重复清算与重复入账
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.confirmFinish(clientUserId, orderSn);
+        }, "重复确认结单必须被拦截，防止重复清算资损！");
+
+        // 8. 【幂等】重复申请结单同样必须被拦截
+        assertThrows(ApiException.class, () -> {
+            companionOrderService.applyFinish(companionUserId, orderSn, "/uploads/screenshot.png");
+        }, "重复申请结单必须被拦截！");
+
+        System.out.println("✅ 订单状态机校验与越权访问拦截测试全部通过！");
+    }
+
+    /**
+     * 【单元测试 13】抽佣比例热配置必须真实影响清算结果（秒级生效）
+     */
+    @Test
+    @Order(13)
+    public void test13_CommissionHotConfigActuallyAffectsSettlement() {
+        System.out.println("\n========== [单元测试 13: 抽佣比例热配置对清算结果的真实影响测试] ==========");
+
+        // 1. 管理员将抽佣比例热更新为 20%
+        PlatformConfigDTO config = new PlatformConfigDTO();
+        config.setPaymentMode("mock");
+        config.setCommissionPercent(20.0);
+        platformConfigService.savePlatformConfig(config);
+        assertEquals(20.0, platformConfigService.getPlatformConfig().getCommissionPercent(), "抽佣比例必须热更新为 20%");
+
+        // 2. 下单并完成履约
+        CreateOrderDTO orderDTO = new CreateOrderDTO();
+        orderDTO.setCompanionUserId(companionUserId);
+        orderDTO.setSkillId(testSkillId);
+        orderDTO.setQuantity(1);
+        orderDTO.setGameServer("微信区");
+        orderDTO.setGameAccount("热配置测试账号");
+        PaymentResultVO payResult = companionOrderService.createAndPayOrder(clientUserId, orderDTO);
+        String orderSn = payResult.getOrderSn();
+
+        companionOrderService.acceptOrder(companionUserId, orderSn);
+        companionOrderService.applyFinish(companionUserId, orderSn, "/uploads/screenshot.png");
+        companionOrderService.confirmFinish(clientUserId, orderSn);
+
+        // 3. 断言清算单按 20% 抽佣计算（而不是写死的 10%）
+        CompanionOrder finished = companionOrderService.getOrderDetail(orderSn);
+        int total = finished.getTotalAmount();
+        int expectedGross = (int) Math.round(total * 0.20);
+        int expectedChannelFee = (int) Math.round(total * 0.006);
+        assertEquals(expectedGross, finished.getSettlement().getPlatformGrossFee(),
+                "平台毛抽佣必须按热配置的 20% 计算（旧实现写死 @Value 导致热配置失效）");
+        assertEquals(total - expectedGross, finished.getSettlement().getCompanionIncome(),
+                "陪练师收益必须按热配置抽佣后的金额入账");
+        assertEquals(expectedGross - expectedChannelFee, finished.getSettlement().getPlatformNetProfit(),
+                "平台净利润必须为毛抽佣减去微信 0.6% 通道费");
+
+        // 4. 恢复默认 10% 抽佣，避免影响其它用例
+        PlatformConfigDTO restore = new PlatformConfigDTO();
+        restore.setPaymentMode("mock");
+        restore.setCommissionPercent(10.0);
+        platformConfigService.savePlatformConfig(restore);
+
+        System.out.println("✅ 抽佣比例热配置对清算结果的真实影响验证通过！");
     }
 }

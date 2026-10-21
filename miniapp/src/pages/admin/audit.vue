@@ -2,7 +2,7 @@
   <view class="container">
     <!-- 管理员手机端数据大盘 (真实从数据库统计汇总) -->
     <view class="dashboard-card">
-      <view class="dash-title">平台今日实时经营大盘 (MySQL数据)</view>
+      <view class="dash-title">平台今日实时经营大盘 (财务真实对账)</view>
       <view class="dash-grid">
         <view class="dash-item">
           <text class="dash-val">{{ dashboard.todayOrderCount || 0 }}</text>
@@ -13,8 +13,16 @@
           <text class="dash-lbl">今日交易流水</text>
         </view>
         <view class="dash-item">
-          <text class="dash-val income">¥{{ ((dashboard.todayPlatformFee || 0) / 100).toFixed(2) }}</text>
-          <text class="dash-lbl">平台抽佣所得</text>
+          <text class="dash-val">¥{{ ((dashboard.todayPlatformFee || 0) / 100).toFixed(2) }}</text>
+          <text class="dash-lbl">平台毛抽佣</text>
+        </view>
+        <view class="dash-item">
+          <text class="dash-val cost">-¥{{ ((dashboard.todayChannelFee || 0) / 100).toFixed(2) }}</text>
+          <text class="dash-lbl">微信通道费(0.6%)</text>
+        </view>
+        <view class="dash-item full-width">
+          <text class="dash-val net-profit">¥{{ ((dashboard.todayNetProfit || 0) / 100).toFixed(2) }}</text>
+          <text class="dash-lbl">🌟 今日实际净利润 (扣减微信通道费后)</text>
         </view>
       </view>
     </view>
@@ -62,6 +70,30 @@
         </view>
 
         <view class="field-item">
+          <text class="field-lbl">申报项目：</text>
+          <text class="field-val highlight">共申报 {{ (item.skills && item.skills.length) || 1 }} 个游戏项目</text>
+        </view>
+
+        <!-- 多游戏技能与资质截图卡片展示 -->
+        <view v-if="item.skills && item.skills.length > 0" class="audit-skills-list">
+          <view v-for="(sk, sIdx) in item.skills" :key="sIdx" class="audit-skill-row">
+            <view class="skill-meta">
+              <text class="skill-name">🎮 {{ sk.gameName }}</text>
+              <text class="skill-rank">段位: {{ sk.rankName }}</text>
+              <text class="skill-price">定价: ¥{{ ((sk.price || 2500) / 100).toFixed(0) }}/{{ sk.unit || '小时' }}</text>
+            </view>
+            <image 
+              v-if="sk.rankImg" 
+              class="rank-thumb-small" 
+              :src="sk.rankImg" 
+              mode="aspectFill" 
+              @click.stop="previewImage(sk.rankImg)" 
+            />
+          </view>
+        </view>
+
+        <!-- 兼容单游戏展示 -->
+        <view v-else class="field-item">
           <text class="field-lbl">擅长游戏：</text>
           <text class="field-val">{{ item.rankName }}</text>
         </view>
@@ -77,8 +109,8 @@
           <text class="voice-duration">({{ item.voiceDuration }}秒)</text>
         </view>
 
-        <!-- 段位凭证截图 -->
-        <view class="rank-img-box" @click="previewImage(item.rankImg)">
+        <!-- 单图兜底凭证 -->
+        <view v-if="!item.skills || item.skills.length === 0" class="rank-img-box" @click="previewImage(item.rankImg)">
           <image class="rank-thumb" :src="item.rankImg" mode="aspectFill" />
           <text class="preview-tip">点击放大查验真实段位凭证</text>
         </view>
@@ -239,6 +271,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { onPullDownRefresh } from '@dcloudio/uni-app';
 import { getPendingAuditsApi, auditDecisionApi, getDashboardSummaryApi, getPlatformConfigApi, savePlatformConfigApi, type PlatformConfig } from '../../api/admin';
 import { getAdminWithdrawListApi, auditWithdrawApi, type WithdrawItem } from '../../api/wallet';
 
@@ -424,6 +457,13 @@ function rejectWithdraw(withdrawId: number) {
 onMounted(() => {
   loadData();
 });
+
+onPullDownRefresh(() => {
+  loadData();
+  setTimeout(() => {
+    uni.stopPullDownRefresh();
+  }, 600);
+});
 </script>
 
 <style scoped>
@@ -445,10 +485,23 @@ onMounted(() => {
 }
 .dash-grid {
   display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx 0;
   justify-content: space-between;
 }
+.dash-item {
+  width: 25%;
+  text-align: center;
+}
+.dash-item.full-width {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 12rpx;
+  padding: 12rpx 0;
+  margin-top: 8rpx;
+}
 .dash-val {
-  font-size: 38rpx;
+  font-size: 32rpx;
   font-weight: bold;
   display: block;
 }
@@ -457,6 +510,13 @@ onMounted(() => {
 }
 .dash-val.income {
   color: #4ade80;
+}
+.dash-val.cost {
+  color: #f87171;
+}
+.dash-val.net-profit {
+  color: #34d399;
+  font-size: 38rpx;
 }
 .dash-lbl {
   font-size: 22rpx;
@@ -575,6 +635,44 @@ onMounted(() => {
   width: 100%;
   height: 220rpx;
   border-radius: 12rpx;
+}
+.audit-skills-list {
+  background: #f9fafb;
+  border-radius: 12rpx;
+  padding: 12rpx;
+  margin: 12rpx 0;
+}
+.audit-skill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1rpx solid #e5e7eb;
+  padding: 10rpx 0;
+}
+.audit-skill-row:last-child {
+  border-bottom: none;
+}
+.skill-meta {
+  display: flex;
+  flex-direction: column;
+}
+.skill-name {
+  font-size: 24rpx;
+  font-weight: bold;
+  color: #4f46e5;
+}
+.skill-rank {
+  font-size: 22rpx;
+  color: #374151;
+}
+.skill-price {
+  font-size: 20rpx;
+  color: #059669;
+}
+.rank-thumb-small {
+  width: 100rpx;
+  height: 80rpx;
+  border-radius: 8rpx;
 }
 .preview-tip {
   position: absolute;

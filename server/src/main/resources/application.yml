@@ -7,7 +7,10 @@ spring:
   application:
     name: game-companion-server
   profiles:
-    active: dev
+    # 运行环境：dev(本地联调) / prod(生产)
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+    # 引入本地私有配置（application-local.yml，已被 .gitignore 忽略；文件不存在时自动跳过）
+    include: local
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
@@ -18,13 +21,22 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     cache-enabled: false
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   global-config:
     db-config:
       id-type: auto
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+
+# 日志输出配置 (消除底层 SqlSession 轮询噪音，保留核心业务日志)
+logging:
+  level:
+    root: INFO
+    com.game.companion: INFO
+    org.apache.ibatis: WARN
+    org.mybatis: WARN
+    com.baomidou.mybatisplus: WARN
 
 # Knife4j 接口文档配置
 knife4j:
@@ -41,33 +53,60 @@ knife4j:
         api-rule-resources:
           - com.game.companion.modules
 
+# Sa-Token 会话与鉴权配置 (前端通过请求头 satoken 携带凭证)
+sa-token:
+  token-name: satoken
+  # 会话有效期 7 天
+  timeout: 604800
+  # 不做临时活跃度校验
+  active-timeout: -1
+  # 允许同一账号多端同时在线
+  is-concurrent: true
+  # 每次登录都生成新 token (保证前端 401 静默重登可以立即换到新凭证)
+  is-share: false
+  token-style: uuid
+  is-log: false
+  # 仅从请求头读取 token，禁止从 Cookie 读取(小程序场景无 Cookie)
+  is-read-cookie: false
+  is-read-header: true
+
 # 平台业务与支付策略配置
 platform:
   # 支付模式: mock (开发/沙箱一键模拟支付) | wechat (微信官方V3支付)
-  payment-mode: mock
-  # 平台基础抽佣比例 (例如 0.10 代表抽佣 10%)
-  commission-rate: 0.10
-  # 指定单超时流转至大厅时间 (分钟)
-  order-assign-timeout-minutes: 8
-  # 待付款超时自动关闭时间 (分钟)
-  order-pay-timeout-minutes: 15
+  payment-mode: ${PLATFORM_PAYMENT_MODE:mock}
+  # 平台基础抽佣比例 (例如 0.10 代表抽佣 10%) —— 仅作为热配置缺失时的兜底值
+  commission-rate: ${PLATFORM_COMMISSION_RATE:0.10}
+  # 微信支付通道费率 (0.6%)，落盘于 pay_flow.channel_fee 与 order_settlement.channel_fee
+  channel-fee-rate: ${PLATFORM_CHANNEL_FEE_RATE:0.006}
+  # 指定单超时未接单自动退款阈值 (分钟)
+  order-accept-timeout-minutes: ${PLATFORM_ACCEPT_TIMEOUT_MINUTES:10}
   # 陪玩师申请完结后，客户超时自动结单时间 (小时)
-  order-finish-timeout-hours: 24
+  order-finish-timeout-hours: ${PLATFORM_FINISH_TIMEOUT_HOURS:24}
+  # 超时订单调度扫描间隔 (毫秒)
+  scheduler.scan-interval-ms: ${PLATFORM_SCHEDULER_INTERVAL_MS:60000}
+  # 【开发期特权工具】诊断接口 / 身份切换等后门开关，生产环境必须为 false
+  dev-tools-enabled: ${PLATFORM_DEV_TOOLS_ENABLED:false}
 
-# 微信生态配置预留 (生产环境配置)
+# 微信生态配置（敏感信息一律走环境变量，禁止硬编码入库）
 wx:
   miniapp:
-    appid: "wxd6d00a7513f90fe9"
-    secret: "0797974b6bc067e1d9a7f04d3dfaa3b6"
+    appid: ${WX_MINIAPP_APPID:}
+    secret: ${WX_MINIAPP_SECRET:}
     template-id:
-      new-order: "Hi9R8Rt60xAEsrGEL9RcR-QDs_IeUntIuLSh1YaeUkU"
+      new-order: ${WX_MINIAPP_TEMPLATE_NEW_ORDER:}
   mp:
-    appid: "your-mp-appid"
-    secret: "your-mp-secret"
+    appid: ${WX_MP_APPID:}
+    secret: ${WX_MP_SECRET:}
     template-id:
-      new-order: "your-template-id-for-new-order"
+      new-order: ${WX_MP_TEMPLATE_NEW_ORDER:}
   pay:
-    appId: "wxd6d00a7513f90fe9"
-    mchId: "your-mch-id"
-    apiV3Key: "your-apiv3-key"
-    keyPath: "classpath:cert/apiclient_key.pem"
+    appId: ${WX_MINIAPP_APPID:}
+    mchId: ${WX_PAY_MCH_ID:}
+    apiV3Key: ${WX_PAY_API_V3_KEY:}
+    # 商户私钥 / 证书本地路径（生产环境建议改用 wx.pay.key-content 热配置）
+    keyPath: ${WX_PAY_KEY_PATH:classpath:cert/apiclient_key.pem}
+    certPath: ${WX_PAY_CERT_PATH:classpath:cert/apiclient_cert.pem}
+    # 支付结果异步回调地址（需公网可达）
+    notify-url: ${WX_PAY_NOTIFY_URL:}
+    # 商家转账到零钱的经营场景 ID
+    transfer-scene-id: ${WX_PAY_TRANSFER_SCENE_ID:}

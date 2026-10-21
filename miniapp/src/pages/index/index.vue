@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { onPullDownRefresh } from '@dcloudio/uni-app';
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app';
 import { getGameCategoriesApi, getCompanionsApi, type CompanionItem } from '../../api/companion';
 
 const games = ref<string[]>(['全部']);
@@ -165,6 +165,11 @@ function goToConsult(item: CompanionItem) {
 }
 
 onPullDownRefresh(() => {
+  loadCompanions();
+});
+
+// 每次页面展现 (从结单/评价页返回时) 自动重新拉取最新真实评分与接单量
+onShow(() => {
   loadCompanions();
 });
 

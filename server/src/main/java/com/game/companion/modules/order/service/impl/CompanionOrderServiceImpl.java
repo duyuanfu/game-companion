@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.game.companion.common.enums.OrderStatusEnum;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
+import com.game.companion.modules.admin.service.PlatformConfigService;
 import com.game.companion.modules.chat.entity.ChatMessage;
 import com.game.companion.modules.chat.mapper.ChatMessageMapper;
 import com.game.companion.modules.companion.entity.CompanionProfile;
@@ -18,7 +19,11 @@ import com.game.companion.modules.companion.mapper.CompanionSkillMapper;
 import com.game.companion.modules.notice.service.NoticeService;
 import com.game.companion.modules.order.dto.CreateOrderDTO;
 import com.game.companion.modules.order.entity.CompanionOrder;
+import com.game.companion.modules.order.entity.OrderSettlement;
+import com.game.companion.modules.order.entity.PayFlow;
 import com.game.companion.modules.order.mapper.CompanionOrderMapper;
+import com.game.companion.modules.order.mapper.OrderSettlementMapper;
+import com.game.companion.modules.order.mapper.PayFlowMapper;
 import com.game.companion.modules.order.service.CompanionOrderService;
 import com.game.companion.modules.user.entity.SysUser;
 import com.game.companion.modules.user.mapper.SysUserMapper;
@@ -41,7 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Date;
-import java.util.concurrent.TimeUnit;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -57,16 +62,39 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     private final UserWalletMapper userWalletMapper;
     private final WalletFlowMapper walletFlowMapper;
     private final ChatMessageMapper chatMessageMapper;
+    private final PayFlowMapper payFlowMapper;
+    private final OrderSettlementMapper orderSettlementMapper;
+    private final PlatformConfigService platformConfigService;
 
     @Autowired(required = false)
     private RedissonClient redissonClient;
 
+    /**
+     * 平台抽佣比例兜底值 (0.10 = 10%)。
+     * 实际生效值以管理员热配置 {@code platform.commission-percent} 为准，秒级生效。
+     */
     @Value("${platform.commission-rate:0.10}")
     private Double commissionRate;
+
+    /**
+     * 微信支付通道费率 (0.6%)，落盘于 pay_flow.channel_fee 与 order_settlement.channel_fee。
+     */
+    @Value("${platform.channel-fee-rate:0.006}")
+    private Double channelFeeRate;
+
+    /**
+     * 指定单超时流转 / 自动退款阈值 (分钟)。
+     */
+    @Value("${platform.order-accept-timeout-minutes:10}")
+    private int acceptTimeoutMinutes;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto) {
+        if (clientUserId == null || clientUserId <= 0) {
+            throw new ApiException("操作被拒绝：请先登录后再下单");
+        }
+
         // 0. 【严密防线】严禁自己预约自己的陪练服务 (防刷单)
         if (dto.getCompanionUserId() != null && dto.getCompanionUserId().equals(clientUserId)) {
             throw new ApiException("操作被拒绝：您不能预约自己的陪练服务！");
@@ -74,17 +102,21 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
         // 1. 生成全局唯一订单号 (年月日时分秒 + 随机6位)
         String orderSn = DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(6);
-        
+
         // 2. 真实从数据库 companion_skill 读取该技能项目真实单价与游戏名称
         CompanionSkill skill = companionSkillMapper.selectById(dto.getSkillId());
-        int unitPrice = (skill != null && skill.getPrice() > 0) ? skill.getPrice() : 2500;
-        String gameName = (skill != null && skill.getGameName() != null) ? skill.getGameName() : "开黑电竞";
+        if (skill == null) {
+            throw new ApiException("操作被拒绝：所选服务项目不存在或已下架！");
+        }
+        int unitPrice = (skill.getPrice() != null && skill.getPrice() > 0) ? skill.getPrice() : 2500;
+        String gameName = (skill.getGameName() != null) ? skill.getGameName() : "开黑电竞";
 
-        int totalAmount = unitPrice * dto.getQuantity();
-        int platformFee = (int) Math.round(totalAmount * commissionRate);
-        int companionIncome = totalAmount - platformFee;
+        int quantity = (dto.getQuantity() != null && dto.getQuantity() > 0) ? dto.getQuantity() : 1;
+        int originalAmount = unitPrice * quantity;
+        int discountAmount = 0; // 预留后续优惠券/满减营销扩展
+        int totalAmount = originalAmount - discountAmount;
 
-        // 3. 组装订单实体
+        // 3. 组装纯业务交易订单实体 (彻底解耦资金流水与分佣清算)
         CompanionOrder order = new CompanionOrder();
         order.setOrderSn(orderSn);
         order.setClientUserId(clientUserId);
@@ -93,33 +125,35 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         order.setSkillId(dto.getSkillId());
         order.setGameName(gameName);
         order.setUnitPrice(unitPrice);
-        order.setQuantity(dto.getQuantity());
+        order.setQuantity(quantity);
+        order.setOriginalAmount(originalAmount);
+        order.setDiscountAmount(discountAmount);
         order.setTotalAmount(totalAmount);
-        order.setPlatformFee(platformFee);
-        order.setCompanionIncome(companionIncome);
         order.setOrderType(dto.getCompanionUserId() != null ? 1 : 2);
         order.setIsTransferred(0);
         order.setGameServer(dto.getGameServer());
         order.setGameAccount(dto.getGameAccount());
         order.setClientRemark(dto.getClientRemark());
         order.setOrderStatus(OrderStatusEnum.PENDING_PAY.getCode());
-        order.setPayStatus(0);
         order.setCreateTime(LocalDateTime.now());
 
         save(order);
 
-        // 3. 调用抽象支付网关
+        // 4. 调用抽象支付网关 (真实模式下使用下单客户本人的真实 OpenID)
         PaymentService paymentService = paymentStrategyContext.getService();
+        SysUser client = sysUserMapper.selectById(clientUserId);
+        String clientOpenid = (client != null && client.getOpenid() != null && !client.getOpenid().isEmpty())
+                ? client.getOpenid() : "mock_openid";
         CreatePaymentParam paymentParam = CreatePaymentParam.builder()
                 .orderSn(orderSn)
                 .amount(totalAmount)
                 .description("游戏开黑服务 - " + order.getGameName())
-                .clientOpenid("mock_openid")
+                .clientOpenid(clientOpenid)
                 .build();
 
         PaymentResultVO paymentResult = paymentService.createPayment(paymentParam);
 
-        // 4. 若为 Mock 模式，自动模拟完成支付并流转为“待接单”同时发微信通知
+        // 5. 若为 Mock 模式，自动模拟完成支付并流转为“待接单”同时发微信通知
         if (Boolean.TRUE.equals(paymentResult.getIsMockPaid())) {
             mockPaySuccess(orderSn);
         }
@@ -130,21 +164,51 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void mockPaySuccess(String orderSn) {
+        recordPaySuccess(orderSn, "mock", "mock_tx_" + IdUtil.fastSimpleUUID(), null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void recordPaySuccess(String orderSn, String payType, String transactionId, Integer payAmount) {
         CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
         if (order == null) {
             throw new ApiException("订单不存在: " + orderSn);
         }
 
-        order.setPayStatus(1);
-        order.setPayType("mock");
-        order.setTransactionId("mock_tx_" + IdUtil.fastSimpleUUID());
-        order.setPayTime(LocalDateTime.now());
+        // 幂等保护：仅允许从「待付款」流转一次，重复回调直接返回，避免重复落支付事实
+        if (order.getOrderStatus() != null && order.getOrderStatus() != OrderStatusEnum.PENDING_PAY.getCode()) {
+            log.warn("【支付回调幂等拦截】订单号={} 当前状态={}，忽略重复的支付成功回调", orderSn, order.getOrderStatus());
+            return;
+        }
+
+        int actualAmount = (payAmount != null && payAmount > 0) ? payAmount : order.getTotalAmount();
+
+        // 纯业务状态流转为待接单
         order.setOrderStatus(OrderStatusEnum.PAID_WAIT_ACCEPT.getCode());
         updateById(order);
 
+        // 【金融级支付事实落盘】向 pay_flow 记录真实发生的支付事实与通道扣费，彻底与订单表解耦
+        int channelFee = (int) Math.round(actualAmount * channelFeeRate);
+        PayFlow payFlow = new PayFlow();
+        payFlow.setPaySn("PAY_" + DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(6));
+        payFlow.setOrderSn(orderSn);
+        payFlow.setClientUserId(order.getClientUserId());
+        payFlow.setPayType(payType);
+        payFlow.setTransactionId(transactionId);
+        payFlow.setPayAmount(actualAmount);
+        payFlow.setChannelFee(channelFee);
+        payFlow.setPayStatus(1); // 1-支付成功
+        payFlow.setPayTime(LocalDateTime.now());
+        payFlow.setCreateTime(LocalDateTime.now());
+        payFlow.setUpdateTime(LocalDateTime.now());
+        payFlowMapper.insert(payFlow);
+
         // 触发微信强提醒通知陪玩师
         if (order.getCompanionUserId() != null) {
+            log.info("【下单成功触发通知】开始向陪玩师[{}]下发微信新订单强提醒卡片: orderSn={}", order.getCompanionUserId(), orderSn);
             noticeService.sendNewOrderNotice(order.getCompanionUserId(), orderSn, order.getGameName(), order.getTotalAmount(), order.getClientRemark());
+        } else {
+            log.info("【公共大厅单】该订单无指定陪玩师，流转至派单大厅");
         }
     }
 
@@ -158,8 +222,19 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.PAID_WAIT_ACCEPT.getCode()) {
             throw new ApiException("订单状态不是待接单状态");
         }
-        if (!companionUserId.equals(order.getCompanionUserId())) {
-            throw new ApiException("非指定接单陪玩师，无法接单");
+
+        // 指定单：仅指定的陪玩师本人可接单
+        // 派单大厅单 (orderType=2)：任意在线陪玩师可抢单，成功后绑定抢单人
+        boolean isHallOrder = order.getOrderType() != null && order.getOrderType() == 2;
+        if (isHallOrder) {
+            if (order.getCompanionUserId() != null && !companionUserId.equals(order.getCompanionUserId())) {
+                throw new ApiException("手慢了，该单已被其他陪玩师接走");
+            }
+            order.setCompanionUserId(companionUserId);
+        } else {
+            if (!companionUserId.equals(order.getCompanionUserId())) {
+                throw new ApiException("非指定接单陪玩师，无法接单");
+            }
         }
 
         order.setOrderStatus(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode());
@@ -170,77 +245,15 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     }
 
     @Override
-    public void grabOrderFromHall(Long companionUserId, String orderSn) {
-        // 1. 【后端安全铁律防线】校验抢单人身份：必须是认证陪玩师 (role = 2)
-        SysUser user = sysUserMapper.selectById(companionUserId);
-        if (user == null || user.getRole() == null || user.getRole() != RoleEnum.COMPANION.getCode()) {
-            throw new ApiException("您当前是普通点单客户，尚未认证成为陪玩师，无法参与接单！");
-        }
-
-        // 2. 校验陪玩师审核状态与接单状态
-        CompanionProfile profile = companionProfileMapper.selectOne(
-                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, companionUserId)
-        );
-        if (profile == null || profile.getAuditStatus() != 1) {
-            throw new ApiException("您的陪玩师入驻资质尚未通过审核，暂无法接单");
-        }
-        if (profile.getIsOnline() != 1) {
-            throw new ApiException("您当前处于休息勿扰状态，请先在工作台开启接单开关！");
-        }
-
-        // 3. 校验订单归属：严禁自己抢自己的订单 (防虚假刷单)
-        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
-        if (order == null) {
-            throw new ApiException("订单不存在");
-        }
-        if (companionUserId.equals(order.getClientUserId())) {
-            throw new ApiException("操作被拒绝：您不能接自己发布的点单需求！");
-        }
-
-        // 4. 标准生产级：Redisson 分布式锁防超卖
-        String lockKey = "lock:order:grab:" + orderSn;
-        RLock lock = redissonClient.getLock(lockKey);
-
-        try {
-            boolean acquired = lock.tryLock(2, 5, TimeUnit.SECONDS);
-            if (!acquired) {
-                throw new ApiException("抢单人数过多，请重试");
-            }
-
-            int rows = companionOrderMapper.grabOrderAtomically(orderSn, companionUserId);
-            if (rows <= 0) {
-                throw new ApiException("手慢了，该单已被其他陪玩师抢走！");
-            }
-            log.info("【抢单成功】认证陪玩师[{}]成功抢下订单[{}]", companionUserId, orderSn);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ApiException("抢单失败");
-        } finally {
-            if (lock.isHeldByCurrentThread()) {
-                lock.unlock();
-            }
-        }
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public void transferToPublicHall(String orderSn) {
-        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
-        if (order != null && order.getOrderStatus() != null && order.getOrderStatus() == OrderStatusEnum.PAID_WAIT_ACCEPT.getCode()) {
-            order.setIsTransferred(1);
-            order.setOrderType(2); // 流转为大厅抢单
-            order.setCompanionUserId(null); // 释放指定绑定
-            updateById(order);
-            log.info("【超时自动流转】订单[{}]指定陪玩师超时未响应，已顺利流转至派单大厅！", orderSn);
-        }
-    }
-
-    @Override
     @Transactional(rollbackFor = Exception.class)
     public void applyFinish(Long companionUserId, String orderSn, String screenshotUrl) {
         CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
         if (order == null || !companionUserId.equals(order.getCompanionUserId())) {
             throw new ApiException("无权操作此订单");
+        }
+        // 状态机校验：仅「服务中」状态可申请结单
+        if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode()) {
+            throw new ApiException("当前订单状态不允许申请结单（仅服务中的订单可申请完结）");
         }
         order.setOrderStatus(OrderStatusEnum.APPLIED_FINISH.getCode());
         order.setFinishScreenshot(screenshotUrl);
@@ -252,18 +265,79 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     @Transactional(rollbackFor = Exception.class)
     public void confirmFinish(Long clientUserId, String orderSn) {
         CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
-        if (order == null || !clientUserId.equals(order.getClientUserId())) {
+        if (order == null) {
+            throw new ApiException("订单不存在");
+        }
+        if (clientUserId == null || !clientUserId.equals(order.getClientUserId())) {
             throw new ApiException("无权操作此订单");
         }
+        // 状态机校验：仅「陪玩师已申请完结」状态可由客户确认打款
+        if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.APPLIED_FINISH.getCode()) {
+            throw new ApiException("当前订单状态不允许确认打款（等待陪玩师提交完结凭证后方可确认）");
+        }
+        settleAndPayOut(order, "客户确认打款");
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void autoConfirmFinish(String orderSn) {
+        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
+        if (order == null) {
+            return;
+        }
+        if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.APPLIED_FINISH.getCode()) {
+            return;
+        }
+        settleAndPayOut(order, "客户超时未确认，系统自动结单");
+    }
+
+    /**
+     * 【核心清算流程】订单履约完结 → 生成佣金清算单 → 收益划入陪玩师钱包 → 双向记账流水
+     * 严禁在订单真正完结前调用本方法（绝不早产分润数据）。
+     */
+    private void settleAndPayOut(CompanionOrder order, String operatorDesc) {
+        Long companionId = order.getCompanionUserId();
+        if (companionId == null) {
+            throw new ApiException("订单尚未接单，异常订单请联系平台客服处理");
+        }
+
+        int totalAmt = order.getTotalAmount();
+        double rate = currentCommissionRate();
+        int grossFee = (int) Math.round(totalAmt * rate);
+        int income = totalAmt - grossFee;
+        int channelFee = (int) Math.round(totalAmt * channelFeeRate);
+        int netProfit = grossFee - channelFee;
+
+        // 幂等保护：同一订单只允许生成一张清算单
+        Long existed = orderSettlementMapper.selectCount(
+                new LambdaQueryWrapper<OrderSettlement>().eq(OrderSettlement::getOrderSn, order.getOrderSn()));
+        if (existed != null && existed > 0) {
+            log.warn("【清算幂等拦截】订单号={} 已存在清算单，跳过重复入账", order.getOrderSn());
+            return;
+        }
+
         order.setOrderStatus(OrderStatusEnum.FINISHED.getCode());
         order.setCompleteTime(LocalDateTime.now());
-        order.setSettleTime(LocalDateTime.now());
         updateById(order);
 
-        // 1. 真实将收益划入陪玩师钱包 (user_wallet)
-        Long companionId = order.getCompanionUserId();
-        int income = order.getCompanionIncome();
+        // 1. 【金融级佣金清算事实落盘】在订单真正履约完结时才计算生成清算单 (order_settlement)，绝不早产！
+        OrderSettlement settlement = new OrderSettlement();
+        settlement.setSettleSn("SETTLE_" + DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(6));
+        settlement.setOrderSn(order.getOrderSn());
+        settlement.setClientUserId(order.getClientUserId());
+        settlement.setCompanionUserId(companionId);
+        settlement.setTotalAmount(totalAmt);
+        settlement.setCompanionIncome(income);
+        settlement.setPlatformGrossFee(grossFee);
+        settlement.setChannelFee(channelFee);
+        settlement.setPlatformNetProfit(netProfit);
+        settlement.setFeePayer(1); // 1-平台利润承担通道费
+        settlement.setSettleStatus(1); // 1-已清算
+        settlement.setSettleTime(LocalDateTime.now());
+        settlement.setCreateTime(LocalDateTime.now());
+        orderSettlementMapper.insert(settlement);
 
+        // 2. 真实将清算收益划入陪玩师钱包 (user_wallet)
         UserWallet wallet = userWalletMapper.selectOne(
                 new LambdaQueryWrapper<UserWallet>().eq(UserWallet::getUserId, companionId)
         );
@@ -273,6 +347,7 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             wallet.setBalance(0);
             wallet.setFrozenBalance(0);
             wallet.setTotalIncome(0);
+            wallet.setVersion(0);
             wallet.setCreateTime(LocalDateTime.now());
             userWalletMapper.insert(wallet);
         }
@@ -281,9 +356,12 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         wallet.setBalance(beforeBalance + income);
         wallet.setTotalIncome(wallet.getTotalIncome() + income);
         wallet.setUpdateTime(LocalDateTime.now());
-        userWalletMapper.updateById(wallet);
+        // 乐观锁：版本号不匹配时 updateById 影响行数为 0，此处必须中断事务，防止余额被覆盖丢失
+        if (userWalletMapper.updateById(wallet) < 1) {
+            throw new ApiException("钱包并发更新冲突（乐观锁校验失败），请重试！");
+        }
 
-        // 2. 真实记录钱包明细流水 (wallet_flow)
+        // 3. 真实记录钱包明细流水 (wallet_flow)
         WalletFlow flow = new WalletFlow();
         flow.setFlowSn("FLOW_" + DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(4));
         flow.setUserId(companionId);
@@ -296,7 +374,7 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         flow.setCreateTime(LocalDateTime.now());
         walletFlowMapper.insert(flow);
 
-        // 3. 陪玩师个人主档的已接单总量累加 +1
+        // 4. 陪玩师个人主档的已接单总量累加 +1
         CompanionProfile profile = companionProfileMapper.selectOne(
                 new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, companionId)
         );
@@ -305,17 +383,27 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             companionProfileMapper.updateById(profile);
         }
 
-        log.info("【订单圆满完成】划扣收益 {}分 入陪玩师[{}]钱包, 钱包最新余额: {}分", income, companionId, wallet.getBalance());
+        log.info("【订单完结并清算入账】{} 划扣收益 {}分 入陪玩师[{}]钱包, 平台净利: {}分 (毛抽佣{}分 - 微信通道费{}分)",
+                operatorDesc, income, companionId, netProfit, grossFee, channelFee);
     }
 
-    @Override
-    public Page<CompanionOrder> getHallOrders(int pageNum, int pageSize) {
-        Page<CompanionOrder> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<CompanionOrder> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(CompanionOrder::getOrderStatus, OrderStatusEnum.PAID_WAIT_ACCEPT.getCode())
-               .eq(CompanionOrder::getOrderType, 2)
-               .orderByDesc(CompanionOrder::getCreateTime);
-        return page(page, wrapper);
+    /**
+     * 【热配置】获取当前生效的抽佣比例。
+     * 管理员在手机端修改「平台抽佣比例」后，秒级生效（无需重启服务）。
+     */
+    private double currentCommissionRate() {
+        try {
+            String percentStr = platformConfigService.getConfig("platform.commission-percent", null);
+            if (percentStr != null && !percentStr.trim().isEmpty()) {
+                double percent = Double.parseDouble(percentStr.trim());
+                if (percent >= 0 && percent <= 100) {
+                    return percent / 100.0;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取抽佣热配置失败, 回退默认值: {}", e.getMessage());
+        }
+        return (commissionRate == null) ? 0.10 : commissionRate;
     }
 
     @Override
@@ -324,14 +412,44 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         if (order == null) {
             throw new ApiException("未找到该订单: " + orderSn);
         }
+        // 领域聚合：动态装配关联的支付事实流水与清算单
+        PayFlow payFlow = payFlowMapper.selectOne(
+                new LambdaQueryWrapper<PayFlow>().eq(PayFlow::getOrderSn, orderSn)
+        );
+        order.setPayFlow(payFlow);
+
+        OrderSettlement settlement = orderSettlementMapper.selectOne(
+                new LambdaQueryWrapper<OrderSettlement>().eq(OrderSettlement::getOrderSn, orderSn)
+        );
+        order.setSettlement(settlement);
+
+        // 动态装配预计/实际收益 (解决待接单时显示0.00的问题)
+        fillEstimatedIncome(order);
+
         return order;
+    }
+
+    @Override
+    public boolean canViewOrder(Long viewerUserId, int viewerRole, CompanionOrder order) {
+        if (order == null) {
+            return false;
+        }
+        if (viewerRole == RoleEnum.ADMIN.getCode()) {
+            return true;
+        }
+        if (viewerUserId == null) {
+            return false;
+        }
+        return viewerUserId.equals(order.getClientUserId())
+                || viewerUserId.equals(order.getCompanionUserId())
+                || viewerUserId.equals(order.getOriginalCompanionId());
     }
 
     @Override
     public Page<CompanionOrder> getMyOrders(Long userId, String roleType, Integer orderStatus, int pageNum, int pageSize) {
         Page<CompanionOrder> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<CompanionOrder> wrapper = new LambdaQueryWrapper<>();
-        
+
         if ("companion".equalsIgnoreCase(roleType)) {
             wrapper.eq(CompanionOrder::getCompanionUserId, userId);
         } else {
@@ -343,7 +461,24 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         }
 
         wrapper.orderByDesc(CompanionOrder::getCreateTime);
-        return page(page, wrapper);
+        Page<CompanionOrder> resPage = page(page, wrapper);
+        if (resPage.getRecords() != null) {
+            resPage.getRecords().forEach(this::fillEstimatedIncome);
+        }
+        return resPage;
+    }
+
+    private void fillEstimatedIncome(CompanionOrder order) {
+        if (order == null) return;
+        if (order.getSettlement() != null && order.getSettlement().getCompanionIncome() != null) {
+            order.setCompanionIncome(order.getSettlement().getCompanionIncome());
+            order.setPlatformFee(order.getSettlement().getPlatformGrossFee());
+        } else {
+            int totalAmt = order.getTotalAmount() != null ? order.getTotalAmount() : 0;
+            int fee = (int) Math.round(totalAmt * currentCommissionRate());
+            order.setPlatformFee(fee);
+            order.setCompanionIncome(totalAmt - fee);
+        }
     }
 
     @Override
@@ -353,7 +488,7 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         if (order == null) {
             throw new ApiException("未找到该订单");
         }
-        if (!clientUserId.equals(order.getClientUserId())) {
+        if (clientUserId == null || !clientUserId.equals(order.getClientUserId())) {
             throw new ApiException("操作被拒绝：您只能撤回自己下的订单");
         }
         // 只有待接单状态(1)允许客户自主无条件全额撤回退款
@@ -369,66 +504,35 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         }
 
         order.setOrderStatus(OrderStatusEnum.REFUNDED.getCode()); // 6 已退款
-        order.setPayStatus(2); // 2 已退款
         updateById(order);
 
-        log.info("【客户主动撤单并退款成功】订单号={}, 客户ID={}, 全额退款={}分", orderSn, clientUserId, order.getTotalAmount());
+        // 同步冲正资金支付流水表 (pay_flow，退款事实由流水表承载)
+        PayFlow payFlow = payFlowMapper.selectOne(
+                new LambdaQueryWrapper<PayFlow>().eq(PayFlow::getOrderSn, orderSn)
+        );
+        if (payFlow != null) {
+            payFlow.setPayStatus(3); // 3-已全额退款
+            payFlow.setRefundAmount(order.getTotalAmount());
+            payFlow.setRefundChannelFee(payFlow.getChannelFee()); // 冲正微信通道费
+            payFlow.setUpdateTime(LocalDateTime.now());
+            payFlowMapper.updateById(payFlow);
+        }
+
+        log.info("【客户主动撤单并退款成功】订单号={}, 客户ID={}, 全额退款={}分, 支付流水已冲正",
+                orderSn, clientUserId, order.getTotalAmount());
     }
 
+    /**
+     * 【扩展架构设计提示】
+     * 按照规范的财务核算与支付审计原则，加钟续单应当通过独立的加钟子订单 (addon_sub_order)
+     * 或独立的支付单 (payment_record) 进行派生，避免直接污染原订单初始购买数量及可能发生的重名商户单号异常。
+     * 当前版本暂时下线该直接累加逻辑，保留接口定义作为后续加钟子订单模块的扩展切入点。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PaymentResultVO addOnOrder(Long clientUserId, String orderSn, int addQuantity) {
-        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
-        if (order == null) {
-            throw new ApiException("未找到该订单");
-        }
-        if (!clientUserId.equals(order.getClientUserId())) {
-            throw new ApiException("操作被拒绝：只有下单客户本人可以发起加钟续单");
-        }
-        if (order.getOrderStatus() == null || order.getOrderStatus() != OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode()) {
-            throw new ApiException("当前订单未处于服务沟通中，无法加钟续单！");
-        }
-        if (addQuantity <= 0) {
-            throw new ApiException("加钟数量至少为 1");
-        }
-
-        // 1. 计算加钟费用与提成
-        int addAmount = order.getUnitPrice() * addQuantity;
-        int addFee = (int) Math.round(addAmount * commissionRate);
-        int addIncome = addAmount - addFee;
-
-        // 2. 模拟/真实支付加钟款项
-        PaymentService paymentService = paymentStrategyContext.getService();
-        CreatePaymentParam paymentParam = CreatePaymentParam.builder()
-                .orderSn(orderSn + "_ADD_" + addQuantity)
-                .amount(addAmount)
-                .description("开黑加钟续单 - " + order.getGameName() + " (+" + addQuantity + ")")
-                .clientOpenid("mock_openid")
-                .build();
-        PaymentResultVO payResult = paymentService.createPayment(paymentParam);
-
-        // 3. 更新主订单数量与总额
-        order.setQuantity(order.getQuantity() + addQuantity);
-        order.setTotalAmount(order.getTotalAmount() + addAmount);
-        order.setPlatformFee(order.getPlatformFee() + addFee);
-        order.setCompanionIncome(order.getCompanionIncome() + addIncome);
-        updateById(order);
-
-        // 4. 自动向开黑聊天房间插入一条系统加钟广播
-        ChatMessage sysMsg = new ChatMessage();
-        sysMsg.setOrderSn(orderSn);
-        sysMsg.setSenderId(0L); // 0 代表系统消息
-        sysMsg.setSenderName("平台系统广播");
-        sysMsg.setSenderAvatar("https://img.icons8.com/color/96/lightning-bolt.png");
-        sysMsg.setContent("⚡️ 老板刚刚成功加钟续费 " + addQuantity + " 局/小时！当前累计预约时长: " + order.getQuantity() + "，继续带飞开黑！");
-        sysMsg.setCreateTime(LocalDateTime.now());
-        chatMessageMapper.insert(sysMsg);
-
-        log.info("【客户加钟续单成功】订单号={}, 增加数量={}, 新总额={}分, 陪练师新收益={}分",
-                orderSn, addQuantity, order.getTotalAmount(), order.getCompanionIncome());
-
-        payResult.setOrderSn(orderSn);
-        return payResult;
+        log.warn("加钟续单功能已进入解耦扩展模式，当前接口保留作为扩展切入点。订单号: {}", orderSn);
+        throw new ApiException("加钟续单功能正在升级为独立子订单体系，当前暂未开放，敬请期待！");
     }
 
     @Override
@@ -442,10 +546,98 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             return false;
         }
 
-        // 生产规则：超过 10 分钟自动退款
+        // 真实超时判定：以「下单时间 + 超时阈值」与当前时间比较
+        LocalDateTime deadline = order.getCreateTime() == null
+                ? null
+                : order.getCreateTime().plusMinutes(acceptTimeoutMinutes);
+        if (deadline == null || LocalDateTime.now().isBefore(deadline)) {
+            return false;
+        }
+
         // 触发自动原路退款
         cancelAndRefundOrder(order.getClientUserId(), orderSn);
-        log.info("【接单超时自动退款触发】订单[{}]陪练师超时未接单，已自动为客户[{}]原路退款！", orderSn, order.getClientUserId());
+        log.info("【接单超时自动退款触发】订单[{}]陪练师超时未接单，已自动为客户[{}]原路退款并冲正流水！", orderSn, order.getClientUserId());
         return true;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void applyDispute(Long clientUserId, String orderSn, String reason) {
+        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
+        if (order == null) {
+            throw new ApiException("未找到该订单: " + orderSn);
+        }
+        if (clientUserId == null || !clientUserId.equals(order.getClientUserId())) {
+            throw new ApiException("操作被拒绝：只有下单客户本人才能发起售后维权");
+        }
+        // 仅在服务中(2)或待确认(3)时允许发起维权争议
+        if (order.getOrderStatus() != OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode()
+                && order.getOrderStatus() != OrderStatusEnum.APPLIED_FINISH.getCode()) {
+            throw new ApiException("当前订单状态不允许发起维权仲裁");
+        }
+
+        order.setOrderStatus(OrderStatusEnum.DISPUTING.getCode());
+        order.setDisputeReason(reason != null && !reason.trim().isEmpty() ? reason.trim() : "客户申请平台介入处理服务争议");
+        order.setDisputeTime(LocalDateTime.now());
+        updateById(order);
+
+        // 向开黑聊天室发送系统维权广播
+        ChatMessage sysMsg = new ChatMessage();
+        sysMsg.setOrderSn(orderSn);
+        sysMsg.setSenderId(0L);
+        sysMsg.setSenderName("平台维权中心");
+        sysMsg.setSenderAvatar("https://img.icons8.com/color/96/shield.png");
+        sysMsg.setContent("⚠️ 客户已发起售后维权争议申请，平台管理员已介入核实，当前订单暂停自动结算！");
+        sysMsg.setCreateTime(LocalDateTime.now());
+        chatMessageMapper.insert(sysMsg);
+
+        log.info("【客户发起维权争议】订单号={}, 客户ID={}, 争议原因={}", orderSn, clientUserId, order.getDisputeReason());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void auditDispute(Long adminUserId, String orderSn, boolean refundToClient, String remark) {
+        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
+        if (order == null) {
+            throw new ApiException("未找到该订单: " + orderSn);
+        }
+        if (order.getOrderStatus() != OrderStatusEnum.DISPUTING.getCode()) {
+            throw new ApiException("该订单未处于维权争议中，无需仲裁");
+        }
+
+        if (refundToClient) {
+            // 仲裁支持客户：全额退款
+            PaymentService paymentService = paymentStrategyContext.getService();
+            boolean refundSuccess = paymentService.refund(orderSn, order.getTotalAmount(), order.getTotalAmount(), "维权仲裁退款: " + remark);
+            if (!refundSuccess) {
+                throw new ApiException("仲裁退款调用支付网关失败");
+            }
+            order.setOrderStatus(OrderStatusEnum.DISPUTE_REFUNDED.getCode());
+            order.setDisputeResult("仲裁通过，全额退款给客户。处理意见: " + remark);
+
+            // 同步冲正支付流水 (pay_flow)
+            PayFlow payFlow = payFlowMapper.selectOne(
+                    new LambdaQueryWrapper<PayFlow>().eq(PayFlow::getOrderSn, orderSn)
+            );
+            if (payFlow != null) {
+                payFlow.setPayStatus(3);
+                payFlow.setRefundAmount(order.getTotalAmount());
+                payFlow.setRefundChannelFee(payFlow.getChannelFee());
+                payFlow.setUpdateTime(LocalDateTime.now());
+                payFlowMapper.updateById(payFlow);
+            }
+        } else {
+            // 仲裁驳回客户维权：恢复为原待确认或服务中状态
+            if (order.getFinishScreenshot() != null && !order.getFinishScreenshot().isEmpty()) {
+                order.setOrderStatus(OrderStatusEnum.APPLIED_FINISH.getCode());
+            } else {
+                order.setOrderStatus(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode());
+            }
+            order.setDisputeResult("仲裁驳回客户申请，继续履约。处理意见: " + remark);
+        }
+
+        updateById(order);
+        log.info("【管理员完成维权仲裁】订单号={}, 仲裁人ID={}, 是否退款={}, 结果={}",
+                orderSn, adminUserId, refundToClient, order.getDisputeResult());
     }
 }
