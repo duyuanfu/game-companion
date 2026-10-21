@@ -3,6 +3,7 @@ package com.game.companion.modules.admin.service;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.game.companion.modules.admin.dto.AuditApplyDTO;
 import com.game.companion.modules.admin.vo.AdminDashboardVO;
+import com.game.companion.modules.admin.vo.AdminOrderItemVO;
 import com.game.companion.modules.admin.vo.CompanionAuditItemVO;
 
 public interface AdminDashboardService {
@@ -12,4 +13,9 @@ public interface AdminDashboardService {
     void processAudit(AuditApplyDTO dto);
 
     AdminDashboardVO getDashboardSummary();
+
+    /**
+     * 【待接单订单】查询尚未被接单的订单，含陪玩师联系方式，供平台线下通知
+     */
+    Page<AdminOrderItemVO> getPendingAcceptOrders(int pageNum, int pageSize);
 }

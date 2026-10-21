@@ -7,7 +7,10 @@ import com.game.companion.common.exception.ApiException;
 import com.game.companion.modules.admin.dto.AuditApplyDTO;
 import com.game.companion.modules.admin.service.AdminDashboardService;
 import com.game.companion.modules.admin.vo.AdminDashboardVO;
+import com.game.companion.modules.admin.vo.AdminOrderItemVO;
 import com.game.companion.modules.admin.vo.CompanionAuditItemVO;
+import com.game.companion.modules.game.entity.GameCategory;
+import com.game.companion.modules.game.mapper.GameCategoryMapper;
 import com.game.companion.modules.companion.entity.CompanionProfile;
 import com.game.companion.modules.companion.entity.CompanionSkill;
 import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
@@ -40,6 +43,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
     private final CompanionOrderMapper companionOrderMapper;
     private final com.game.companion.modules.order.mapper.PayFlowMapper payFlowMapper;
     private final com.game.companion.modules.order.mapper.OrderSettlementMapper orderSettlementMapper;
+    private final GameCategoryMapper gameCategoryMapper;
 
     @Override
     public Page<CompanionAuditItemVO> getPendingAudits(int pageNum, int pageSize) {
@@ -166,5 +170,69 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                 .onlineCompanionCount(onlineCount.intValue())
                 .pendingAuditCount(pendingCount.intValue())
                 .build();
+    }
+
+    @Override
+    public Page<AdminOrderItemVO> getPendingAcceptOrders(int pageNum, int pageSize) {
+        Page<CompanionOrder> page = new Page<>(pageNum, pageSize);
+        Page<CompanionOrder> orderPage = companionOrderMapper.selectPage(page,
+                new LambdaQueryWrapper<CompanionOrder>()
+                        .eq(CompanionOrder::getOrderStatus, 1) // 1-已付款待接单
+                        .orderByAsc(CompanionOrder::getCreateTime)  // 最早下单的排最前, 优先处理
+        );
+
+        List<AdminOrderItemVO> result = new ArrayList<>();
+        for (CompanionOrder order : orderPage.getRecords()) {
+            SysUser companion = order.getCompanionUserId() == null
+                    ? null : sysUserMapper.selectById(order.getCompanionUserId());
+            SysUser client = order.getClientUserId() == null
+                    ? null : sysUserMapper.selectById(order.getClientUserId());
+
+            long waitMinutes = order.getCreateTime() == null ? 0
+                    : java.time.Duration.between(order.getCreateTime(), LocalDateTime.now()).toMinutes();
+
+            result.add(AdminOrderItemVO.builder()
+                    .id(order.getId())
+                    .orderSn(order.getOrderSn())
+                    .gameName(order.getGameName())
+                    .gameIcon(resolveGameIcon(order))
+                    .totalAmount(order.getTotalAmount())
+                    .orderStatus(order.getOrderStatus())
+                    .clientUserId(order.getClientUserId())
+                    .clientName(client != null ? client.getNickname() : null)
+                    .companionUserId(order.getCompanionUserId())
+                    .companionName(companion != null ? companion.getNickname() : null)
+                    .companionPhone(companion != null ? companion.getPhone() : null)
+                    .clientRemark(order.getClientRemark())
+                    .createTime(order.getCreateTime())
+                    .waitMinutes(waitMinutes)
+                    .build());
+        }
+
+        Page<AdminOrderItemVO> resultPage = new Page<>(pageNum, pageSize, orderPage.getTotal());
+        resultPage.setRecords(result);
+        return resultPage;
+    }
+
+    /**
+     * 取游戏图标 (字典表统一维护的包内本地图标路径)
+     *
+     * <p>优先按订单关联技能的 {@code game_id} 外键查字典（最可靠），
+     * 名称仅作兜底，避免历史数据名称乱码时取不到图标。</p>
+     */
+    private String resolveGameIcon(CompanionOrder order) {
+        GameCategory category = null;
+        if (order.getSkillId() != null) {
+            CompanionSkill skill = companionSkillMapper.selectById(order.getSkillId());
+            if (skill != null && skill.getGameId() != null && skill.getGameId() > 0) {
+                category = gameCategoryMapper.selectById(skill.getGameId());
+            }
+        }
+        if (category == null && order.getGameName() != null && !order.getGameName().trim().isEmpty()) {
+            category = gameCategoryMapper.selectOne(
+                    new LambdaQueryWrapper<GameCategory>().eq(GameCategory::getName, order.getGameName())
+            );
+        }
+        return category != null ? category.getIcon() : null;
     }
 }

@@ -367,9 +367,46 @@ $$
 > 会在用户未明确同意的情况下被拒收，无法保证送达。改为**平台人工兜底**是确定性更高的方案。
 
 ### 11. 游戏图标
-* `game_category.icon` 为游戏图标地址；`companion_skill.game_id` 为外键
-* `GET /api/companion/skills` 返回 `CompanionSkillVO`，**按 `game_id` 外键**（名称兜底）关联出 `gameIcon` 与 `priceYuan`
-* 下单页「选择开黑服务项目」卡片与顶部摘要均展示游戏图标，缺失时降级为 🎮 占位
+* **图标托管在小程序包内** `/static/game/*.png`（`miniapp/src/static/game/`），**不再依赖任何第三方图床**：
+  * 第三方图床会随时下线/改名（icons8 的「王者荣耀」`honor-of-kings.png` 已 404），
+    且第三方域名在小程序正式版还必须加入 `downloadFile` 合法域名白名单，否则图片被直接拦截；
+  * 本地静态资源随包发布，零网络依赖、零白名单配置。
+* **字典自愈**：`GameCatalogInitializer` 每次启动幂等校正 `game_category`（名称 + 图标），缺失即补建
+* **关联方式**：优先按 `companion_skill.game_id` **外键**关联（名称仅兜底），避免历史数据异常时取错图标
+* **绝对禁止错标**：陪玩师申报的游戏若在字典中匹配不到，`game_id` 记为 `0`（未知游戏），
+  **绝不回退到 id=1**，否则「英雄联盟 / 和平精英」会被静默标成「王者荣耀」，所有游戏显示同一个图标
+* 展示位置：下单页「选择开黑服务项目」卡片与顶部摘要、管理员「待接单订单」列表
+
+### 12. 管理员如何找到「客户已付款但陪玩师还没接」的订单
+
+> 微信订阅消息为一次性机制已下线，陪玩师可能收不到提醒，**管理员必须能看到并主动联系陪玩师**。
+
+管理员手机端工作台新增 **「📋 待接单」** 选项卡：
+
+| 展示项 | 说明 |
+| :--- | :--- |
+| 订单号 / 游戏名 / 图标 | 快速定位是哪一单 |
+| 订单金额 | 便于电话沟通 |
+| **陪玩师昵称 + 手机号** | **一键复制即可拨打**（客户未支付成功的单子陪玩师不会收到） |
+| 客户需求备注 | 沟通时可直接照读 |
+| 已等待分钟数 | ≥5 分钟标红，优先处理 |
+
+排序规则：**最早下单的排最前**（先到先处理）。配合「📢 待通知」事件队列
+（`GET /api/admin/notice/pending`）形成完整闭环：
+
+```text
+客户下单支付
+   ├─▶ 订单状态 = 1(已付款待接单)
+   ├─▶ 生成「新订单待接单」待通知事件（含陪玩师电话）
+   └─▶ 管理员「📋 待接单」列表实时可见 → 复制电话 → 线下催接单
+          └─▶ 10 分钟未接单 → 系统自动为客户全额原路退款
+```
+
+| 接口 | 说明 |
+| :--- | :--- |
+| `GET /api/admin/order/pending-accept` | 待接单订单列表（含游戏图标 + 陪玩师联系方式） |
+| `GET /api/admin/notice/pending` | 待线下通知事件队列 |
+| `POST /api/admin/notice/ack` | 标记事件已完成线下通知 |
 
 ---
 
@@ -440,7 +477,7 @@ $env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
 全部业务逻辑在本地通过 Maven 和 JDK 17 完成了端到端全链路自动化单元测试：
 * **测试用例类**：`server/src/test/java/com/game/companion/OrderFlowIntegrationTest.java`
 * **执行命令**：`mvn test -Dtest=OrderFlowIntegrationTest`
-* **测试结论**：**`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
+* **测试结论**：**`Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
 
 ```text
 [INFO] -------------------------------------------------------
@@ -461,6 +498,7 @@ $env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
 ✅ test13_CommissionHotConfigActuallyAffectsSettlement: 抽佣比例热配置真实影响清算金额 (通过)
 ✅ test14_UpdateProfileAndOptionalVoice: 自助改头像昵称 + 陪练入驻录音选填 + 自定义昵称不被覆盖 (通过)
 ✅ test15_CompanionAdmissionAndOrderStatusGrouping: 陪玩师准入门禁 + 订单状态分类分组筛选 (通过)
+✅ test16_GameCatalogAndIconResolution: 游戏字典自愈 + 图标/gameId 关联 + 管理员待接单列表带图标与电话 (通过)
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------

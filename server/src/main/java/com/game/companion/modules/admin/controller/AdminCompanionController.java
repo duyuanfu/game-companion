@@ -68,6 +68,15 @@ public class AdminCompanionController {
         return CommonResult.success(dashboard);
     }
 
+    @GetMapping("/order/pending-accept")
+    @Operation(summary = "【管理员手机端】待接单订单列表 (含陪玩师联系方式，供线下通知)")
+    public CommonResult<Page<com.game.companion.modules.admin.vo.AdminOrderItemVO>> getPendingAcceptOrders(
+            @RequestParam(defaultValue = "1") int pageNum,
+            @RequestParam(defaultValue = "50") int pageSize) {
+        authGuard.requireAdmin();
+        return CommonResult.success(adminDashboardService.getPendingAcceptOrders(pageNum, pageSize));
+    }
+
     @GetMapping("/notice/pending")
     @Operation(summary = "【管理员手机端】待线下通知事件队列 (新订单/审核结果/维权)")
     public CommonResult<java.util.List<com.game.companion.modules.notice.vo.NoticeItemVO>> getPendingNotices(

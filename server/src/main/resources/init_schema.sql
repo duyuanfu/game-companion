@@ -5,6 +5,12 @@
 -- 金额约定：涉及金额统一使用整型（单位：分，避免浮点数精度问题）
 -- ========================================================
 
+-- ⚠️ 关键：必须先声明连接字符集，否则用 GBK/GB2312 客户端执行本脚本时，
+--    中文游戏名会被写成乱码，导致按名称关联 companion_skill.game_id 全部失效
+--    (表现为「所有游戏都显示成王者荣耀图标」)。请务必保留下面两行。
+SET NAMES utf8mb4;
+SET character_set_client = utf8mb4;
+
 CREATE DATABASE IF NOT EXISTS `game_companion` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 USE `game_companion`;
 
@@ -334,10 +340,13 @@ CREATE TABLE `order_settlement` (
 -- ========================================================
 
 -- 游戏分类字典
+-- ⚠️ 图标统一使用小程序包内静态目录 /static/game/*.png：
+--    1) 第三方图床会随时下线导致 404；2) 第三方域名在小程序正式版需加 downloadFile 合法域名白名单
+--    静态资源随包发布，零网络依赖、零白名单配置
 INSERT INTO `game_category` (`id`, `name`, `icon`, `sort`, `is_active`) VALUES
-(1, '王者荣耀', 'https://img.icons8.com/color/96/honor-of-kings.png', 100, 1),
-(2, '英雄联盟', 'https://img.icons8.com/color/96/league-of-legends.png', 90, 1),
-(3, '和平精英', 'https://img.icons8.com/color/96/pubg.png', 80, 1),
-(4, '无畏契约', 'https://img.icons8.com/color/96/valorant.png', 70, 1),
-(5, '永劫无间', 'https://img.icons8.com/color/96/sword.png', 60, 1),
-(6, '英雄联盟手游', 'https://img.icons8.com/color/96/riot-games.png', 50, 1);
+(1, '王者荣耀', '/static/game/honor-of-kings.png', 100, 1),
+(2, '英雄联盟', '/static/game/league-of-legends.png', 90, 1),
+(3, '和平精英', '/static/game/pubg.png', 80, 1),
+(4, '无畏契约', '/static/game/valorant.png', 70, 1),
+(5, '永劫无间', '/static/game/sword.png', 60, 1),
+(6, '英雄联盟手游', '/static/game/riot-games.png', 50, 1);

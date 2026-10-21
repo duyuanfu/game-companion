@@ -100,9 +100,20 @@
     - 新增 `POST /api/order/pay/{orderSn}` 供「待付款」订单重新拉起支付（仅订单本人可发起）；
     - 前端接入真实 `uni.requestPayment`（微信五要素），支付失败/取消时订单停留在待付款并可重试；
     - 订单详情页新增「立即支付」按钮与待付款态提示面板。
-22. **游戏图标直观化**：
-    - `GET /api/companion/skills` 返回 `CompanionSkillVO`，按 `game_id` 外键关联 `game_category.icon`；
-    - 下单页游戏卡片与顶部摘要均展示图标，缺失时降级为占位符。
+22. **游戏图标直观化 + 字典自愈**：
+    - 图标统一托管在小程序包内 `/static/game/*.png`，**不再依赖第三方图床**
+      （icons8 的「王者荣耀」`honor-of-kings.png` 已 404，且第三方域名需加 downloadFile 白名单）；
+    - 新增 `GameCatalogInitializer`，每次启动幂等校正 `game_category` 的名称与图标，缺失即补建；
+    - 关联改为优先按 `companion_skill.game_id` **外键**（名称兜底）；
+    - **修复错标缺陷**：申报游戏匹配不到字典时 `game_id` 记为 `0`（未知游戏），
+      **绝不回退到 id=1**，否则「英雄联盟 / 和平精英」会被静默标成「王者荣耀」，所有游戏显示同一个图标；
+    - `init_schema.sql` 补充 `SET NAMES utf8mb4`，避免用错字符集的客户端建库时中文名写成乱码。
+23. **管理员可定位并线下通知未接单的陪玩师**：
+    - 管理员工作台新增「📋 待接单」选项卡：订单号 / 游戏图标 / 金额 / **陪玩师昵称+手机号（可一键复制拨打）** /
+      客户备注 / 已等待分钟数（≥5 分钟标红），最早下单的排最前；
+    - 新增 `GET /api/admin/order/pending-accept` 接口；
+    - 与「📢 待通知」事件队列形成闭环：客户下单 → 订单进入待接单 → 管理员看到并电话催单 →
+      10 分钟未接单系统自动为客户全额原路退款。
 23. **微信通道费口径澄清与热配置**：
     - 明确 0.6% 为**合同费率预估值**（微信不提供单笔实收通道费查询接口，费用在结算时截留），非接口返回值；
     - 费率支持热配置（`platform.channel-fee-rate`），管理员手机端可直接调整；
@@ -155,7 +166,7 @@
 全部业务代码在本地通过 Maven 和 JDK 17 完成了端到端自动化单元测试验证：
 * **测试类**：`server/src/test/java/com/game/companion/OrderFlowIntegrationTest.java`
 * **执行命令**：`mvn test -Dtest=OrderFlowIntegrationTest`
-* **测试结果**：**`Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
+* **测试结果**：**`Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
 
 ```text
 [INFO] -------------------------------------------------------
@@ -176,6 +187,7 @@
 ✅ test13_CommissionHotConfigActuallyAffectsSettlement: 抽佣热配置真实影响清算金额校验 (通过)
 ✅ test14_UpdateProfileAndOptionalVoice: 自助改头像昵称 + 陪练入驻录音选填 + 自定义昵称不被入驻覆盖 (通过)
 ✅ test15_CompanionAdmissionAndOrderStatusGrouping: 陪玩师准入门禁 + 订单状态分类分组筛选 (通过)
+✅ test16_GameCatalogAndIconResolution: 游戏字典自愈 + 图标/gameId 关联 + 管理员待接单列表带图标与电话 (通过)
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------

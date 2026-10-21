@@ -42,6 +42,12 @@
         <text class="tab-title">💰 打款待审({{ withdrawList.length }})</text>
       </view>
       <view
+        :class="['audit-tab-item', currentTab === 'order' ? 'active' : '']"
+        @click="switchAuditTab('order')"
+      >
+        <text class="tab-title">📋 待接单({{ pendingOrderList.length }})</text>
+      </view>
+      <view
         :class="['audit-tab-item', currentTab === 'notice' ? 'active' : '']"
         @click="switchAuditTab('notice')"
       >
@@ -52,6 +58,53 @@
         @click="switchAuditTab('config')"
       >
         <text class="tab-title">⚙️ 支付与配置</text>
+      </view>
+    </view>
+
+    <!-- ================= 模块：待接单订单 (平台线下通知陪玩师的依据) ================= -->
+    <view v-if="currentTab === 'order'" class="audit-section">
+      <view class="notice-guide">
+        <text class="guide-title">📋 客户已付款、陪玩师尚未接单的订单</text>
+        <text class="guide-desc">这些订单陪玩师还没接。请直接拨打电话联系陪玩师催接单；10 分钟未接单系统会自动为客户全额退款。</text>
+      </view>
+
+      <view v-if="pendingOrderList.length === 0" class="empty-box">
+        <text class="empty-text">当前没有待接单的订单</text>
+      </view>
+
+      <view v-for="item in pendingOrderList" :key="item.id" class="audit-card pending-order-card">
+        <view class="notice-header">
+          <view class="po-game">
+            <image v-if="item.gameIcon" class="po-icon" :src="item.gameIcon" mode="aspectFit" />
+            <text class="po-game-name">{{ item.gameName }}</text>
+          </view>
+          <text class="po-wait" :class="{ urgent: item.waitMinutes >= 5 }">已等待 {{ item.waitMinutes }} 分钟</text>
+        </view>
+
+        <view class="po-amount-row">
+          <text class="po-amount">¥{{ ((item.totalAmount || 0) / 100).toFixed(2) }}</text>
+          <text class="po-sn">单号: {{ item.orderSn }}</text>
+        </view>
+
+        <view class="po-row">
+          <text class="po-lbl">陪玩师：</text>
+          <text class="po-name">{{ item.companionName || '未指定' }}</text>
+          <text class="po-lbl">　电话：</text>
+          <text class="po-phone">{{ item.companionPhone || '未绑定手机号' }}</text>
+        </view>
+        <view class="po-row">
+          <text class="po-lbl">下单客户：</text>
+          <text class="po-val">{{ item.clientName || '-' }}</text>
+        </view>
+        <view class="po-row" v-if="item.clientRemark">
+          <text class="po-lbl">客户要求：</text>
+          <text class="po-val">{{ item.clientRemark }}</text>
+        </view>
+
+        <view class="po-btns">
+          <button class="po-copy-btn" @click="handleCopyPhone(item)">📞 复制陪玩师电话</button>
+          <button class="po-copy-btn secondary" @click="handleCopyOrderSn(item)">复制订单号</button>
+        </view>
       </view>
     </view>
 
@@ -324,12 +377,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { onPullDownRefresh } from '@dcloudio/uni-app';
-import { getPendingAuditsApi, auditDecisionApi, getDashboardSummaryApi, getPlatformConfigApi, savePlatformConfigApi, getPendingNoticesApi, ackNoticeApi, type PlatformConfig, type NoticeItem } from '../../api/admin';
+import { getPendingAuditsApi, auditDecisionApi, getDashboardSummaryApi, getPlatformConfigApi, savePlatformConfigApi, getPendingNoticesApi, ackNoticeApi, getPendingAcceptOrdersApi, type PlatformConfig, type NoticeItem, type AdminOrderItem } from '../../api/admin';
 import { getAdminWithdrawListApi, auditWithdrawApi, type WithdrawItem } from '../../api/wallet';
 
 const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80';
 
-const currentTab = ref<'companion' | 'withdraw' | 'notice' | 'config'>('companion');
+const currentTab = ref<'companion' | 'withdraw' | 'order' | 'notice' | 'config'>('companion');
 
 const dashboard = ref<any>({
   todayOrderCount: 0,
@@ -341,6 +394,7 @@ const dashboard = ref<any>({
 const auditList = ref<any[]>([]);
 const withdrawList = ref<WithdrawItem[]>([]);
 const noticeList = ref<NoticeItem[]>([]);
+const pendingOrderList = ref<AdminOrderItem[]>([]);
 const loading = ref(false);
 const isPlaying = ref(false);
 let audioContext: UniApp.InnerAudioContext | null = null;
@@ -381,6 +435,14 @@ function loadData() {
     }).finally(() => {
       loading.value = false;
     });
+  } else if (currentTab.value === 'order') {
+    getPendingAcceptOrdersApi().then(res => {
+      pendingOrderList.value = (res.data && res.data.records) ? res.data.records : [];
+    }).catch(() => {
+      pendingOrderList.value = [];
+    }).finally(() => {
+      loading.value = false;
+    });
   } else if (currentTab.value === 'notice') {
     getPendingNoticesApi().then(res => {
       noticeList.value = res.data || [];
@@ -400,9 +462,37 @@ function loadData() {
   }
 }
 
-function switchAuditTab(tab: 'companion' | 'withdraw' | 'notice' | 'config') {
+function switchAuditTab(tab: 'companion' | 'withdraw' | 'order' | 'notice' | 'config') {
   currentTab.value = tab;
   loadData();
+}
+
+/**
+ * 复制陪玩师手机号，方便直接拨打
+ */
+function handleCopyPhone(item: AdminOrderItem) {
+  if (!item.companionPhone) {
+    uni.showToast({ title: '该陪玩师未绑定手机号', icon: 'none' });
+    return;
+  }
+  uni.setClipboardData({
+    data: item.companionPhone,
+    success: () => {
+      uni.showToast({ title: `已复制 ${item.companionName || '陪玩师'} 的电话`, icon: 'none' });
+    }
+  });
+}
+
+/**
+ * 复制订单号
+ */
+function handleCopyOrderSn(item: AdminOrderItem) {
+  uni.setClipboardData({
+    data: item.orderSn,
+    success: () => {
+      uni.showToast({ title: '订单号已复制', icon: 'none' });
+    }
+  });
 }
 
 /**
@@ -715,6 +805,88 @@ onPullDownRefresh(() => {
   border-radius: 30rpx;
   line-height: 2.2;
   margin-top: 16rpx;
+}
+/* 待接单订单卡片 */
+.pending-order-card {
+  border-left: 8rpx solid #6366f1;
+}
+.po-game {
+  display: flex;
+  align-items: center;
+}
+.po-icon {
+  width: 44rpx;
+  height: 44rpx;
+  margin-right: 10rpx;
+  border-radius: 8rpx;
+}
+.po-game-name {
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #111827;
+}
+.po-wait {
+  font-size: 22rpx;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+}
+.po-wait.urgent {
+  color: #dc2626;
+  background: #fee2e2;
+  font-weight: bold;
+}
+.po-amount-row {
+  display: flex;
+  align-items: baseline;
+  margin: 12rpx 0;
+}
+.po-amount {
+  font-size: 36rpx;
+  font-weight: bold;
+  color: #ef4444;
+  margin-right: 16rpx;
+}
+.po-sn {
+  font-size: 22rpx;
+  color: #9ca3af;
+}
+.po-row {
+  font-size: 24rpx;
+  margin-bottom: 6rpx;
+}
+.po-lbl {
+  color: #9ca3af;
+}
+.po-name {
+  color: #111827;
+  font-weight: bold;
+}
+.po-phone {
+  color: #dc2626;
+  font-weight: bold;
+}
+.po-val {
+  color: #4b5563;
+}
+.po-btns {
+  display: flex;
+  margin-top: 16rpx;
+}
+.po-copy-btn {
+  flex: 1;
+  background: #6366f1;
+  color: #ffffff;
+  font-size: 25rpx;
+  border-radius: 30rpx;
+  line-height: 2.2;
+  margin-right: 16rpx;
+}
+.po-copy-btn.secondary {
+  background: #eef2ff;
+  color: #4f46e5;
+  margin-right: 0;
 }
 .applicant-row {
   display: flex;

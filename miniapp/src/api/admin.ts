@@ -27,6 +27,33 @@ export function getDashboardSummaryApi() {
 }
 
 /**
+ * 【待接单订单】管理员线下通知陪玩师时使用（含陪玩师手机号）
+ */
+export interface AdminOrderItem {
+  id: number;
+  orderSn: string;
+  gameName: string;
+  gameIcon?: string;
+  totalAmount: number;
+  orderStatus: number;
+  clientUserId: number;
+  clientName?: string;
+  companionUserId: number;
+  companionName?: string;
+  companionPhone?: string;
+  clientRemark?: string;
+  createTime: string;
+  waitMinutes: number;
+}
+
+export function getPendingAcceptOrdersApi(pageNum = 1, pageSize = 50) {
+  return request<{ records: AdminOrderItem[]; total: number }>({
+    url: `/admin/order/pending-accept?pageNum=${pageNum}&pageSize=${pageSize}`,
+    method: 'GET'
+  });
+}
+
+/**
  * 【平台线下通知】待通知事件队列
  * 微信订阅消息为一次性机制已下线，所有需触达用户的事件改由平台人工线下通知。
  */

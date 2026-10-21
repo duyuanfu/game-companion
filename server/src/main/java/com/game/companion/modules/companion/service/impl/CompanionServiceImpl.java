@@ -365,7 +365,7 @@ public class CompanionServiceImpl implements CompanionService {
                     new LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
                             .eq(com.game.companion.modules.game.entity.GameCategory::getName, skillItem.getGameName())
             );
-            Long gameId = category != null ? category.getId() : 1L;
+            Long gameId = (category != null) ? category.getId() : 0L;
 
             int priceInCents = 2500;
             if (skillItem.getPrice() != null && skillItem.getPrice() > 0) {

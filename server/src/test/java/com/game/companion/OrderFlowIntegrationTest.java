@@ -90,6 +90,12 @@ public class OrderFlowIntegrationTest {
     @Autowired
     private com.game.companion.modules.order.mapper.CompanionOrderMapper companionOrderMapper;
 
+    @Autowired
+    private com.game.companion.modules.game.mapper.GameCategoryMapper gameCategoryMapper;
+
+    @Autowired
+    private com.game.companion.modules.admin.service.AdminDashboardService adminDashboardService;
+
     private static Long clientUserId;
     private static Long companionUserId;
     private static Long testSkillId;
@@ -195,6 +201,17 @@ public class OrderFlowIntegrationTest {
 
             // 自动为 user_wallet 补充 version 乐观锁并发安全字段
             try { stmt.execute("ALTER TABLE `user_wallet` ADD COLUMN `version` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
+
+            // 自动校正 game_category 字典 (建库脚本若用错字符集, 中文名会写成乱码,
+            // 导致按名称关联 game_id 全部失效 -> 所有游戏都显示成王者荣耀图标)
+            try {
+                stmt.execute("UPDATE `game_category` SET `name`='王者荣耀', `icon`='/static/game/honor-of-kings.png' WHERE `id`=1;");
+                stmt.execute("UPDATE `game_category` SET `name`='英雄联盟', `icon`='/static/game/league-of-legends.png' WHERE `id`=2;");
+                stmt.execute("UPDATE `game_category` SET `name`='和平精英', `icon`='/static/game/pubg.png' WHERE `id`=3;");
+                stmt.execute("UPDATE `game_category` SET `name`='无畏契约', `icon`='/static/game/valorant.png' WHERE `id`=4;");
+                stmt.execute("UPDATE `game_category` SET `name`='永劫无间', `icon`='/static/game/sword.png' WHERE `id`=5;");
+                stmt.execute("UPDATE `game_category` SET `name`='英雄联盟手游', `icon`='/static/game/riot-games.png' WHERE `id`=6;");
+            } catch (Exception ignored) {}
 
             // 自动重建/升级 notice_log 为「平台线下通知事件队列」结构
             try { stmt.execute("DROP TABLE IF EXISTS `notice_log`;"); } catch (Exception ignored) {}
@@ -1044,5 +1061,109 @@ public class OrderFlowIntegrationTest {
         assertNotNull(adminView.getSettlement(), "平台管理员必须能看到完整清算对账单！");
 
         System.out.println("✅ 陪玩师准入控制与订单状态分类筛选测试全部通过！");
+    }
+
+    /**
+     * 【单元测试 16】游戏品类字典与图标关联正确性
+     */
+    @Test
+    @Order(16)
+    public void test16_GameCatalogAndIconResolution() {
+        System.out.println("\n========== [单元测试 16: 游戏字典自愈与图标关联正确性测试] ==========");
+
+        // 1. 字典表必须 6 个标准游戏齐备, 且图标为包内本地图标路径
+        var categories = gameCategoryMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
+        );
+        assertTrue(categories.size() >= 6, "游戏品类字典必须至少包含 6 个标准游戏！");
+        for (var c : categories) {
+            assertNotNull(c.getIcon(), "游戏「" + c.getName() + "」必须有图标！");
+            assertTrue(c.getIcon().startsWith("/static/game/"),
+                    "游戏「" + c.getName() + "」的图标必须是包内本地图标(避免第三方图床404/白名单拦截), 实际: " + c.getIcon());
+        }
+
+        // 2. 【关键回归】不同游戏必须解析出不同的 game_id
+        //    (历史缺陷: 名称乱码导致名称关联全部失败并回退到 id=1, 所有游戏都显示成王者荣耀图标)
+        var wangzhe = gameCategoryMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
+                        .eq(com.game.companion.modules.game.entity.GameCategory::getName, "王者荣耀")
+        );
+        var yingxiong = gameCategoryMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
+                        .eq(com.game.companion.modules.game.entity.GameCategory::getName, "英雄联盟")
+        );
+        var heping = gameCategoryMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.game.companion.modules.game.entity.GameCategory>()
+                        .eq(com.game.companion.modules.game.entity.GameCategory::getName, "和平精英")
+        );
+        assertNotNull(wangzhe, "字典中必须存在「王者荣耀」且名称未乱码！");
+        assertNotNull(yingxiong, "字典中必须存在「英雄联盟」且名称未乱码！");
+        assertNotNull(heping, "字典中必须存在「和平精英」且名称未乱码！");
+        assertTrue(wangzhe.getId() != yingxiong.getId() && yingxiong.getId() != heping.getId(),
+                "不同游戏必须是不同的字典ID！");
+
+        // 3. 陪练师申报多游戏后, 每个技能都必须关联到正确的 game_id 与图标
+        var multiDto = new com.game.companion.modules.companion.dto.ApplyCompanionDTO();
+        multiDto.setRealName("多游戏图标测试");
+        multiDto.setPhone("13800000011");
+        multiDto.setBio("t");
+        var s1 = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        s1.setGameName("王者荣耀");
+        s1.setRankName("钻石");
+        s1.setPrice(30);
+        s1.setPriceUnit("YUAN");
+        s1.setUnit("小时");
+        s1.setRankImg("https://x/1.png");
+        var s2 = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        s2.setGameName("英雄联盟");
+        s2.setRankName("钻石");
+        s2.setPrice(30);
+        s2.setPriceUnit("YUAN");
+        s2.setUnit("小时");
+        s2.setRankImg("https://x/2.png");
+        var s3 = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        s3.setGameName("和平精英");
+        s3.setRankName("钻石");
+        s3.setPrice(30);
+        s3.setPriceUnit("YUAN");
+        s3.setUnit("小时");
+        s3.setRankImg("https://x/3.png");
+        multiDto.setSkills(java.util.List.of(s1, s2, s3));
+        companionService.applyCompanion(clientUserId, multiDto);
+
+        var skillViews = companionService.getCompanionSkillViews(clientUserId);
+        assertEquals(3, skillViews.size(), "必须返回 3 个游戏项目！");
+
+        java.util.Set<Long> gameIds = new java.util.HashSet<>();
+        java.util.Set<String> icons = new java.util.HashSet<>();
+        for (var v : skillViews) {
+            assertNotNull(v.getGameId(), "技能「" + v.getGameName() + "」必须关联 game_id！");
+            assertTrue(v.getGameId() > 0, "技能「" + v.getGameName() + "」的 game_id 不能是未知游戏(0)！");
+            gameIds.add(v.getGameId());
+            assertNotNull(v.getGameIcon(), "技能「" + v.getGameName() + "」必须返回游戏图标！");
+            icons.add(v.getGameIcon());
+        }
+        assertEquals(3, gameIds.size(), "三个不同游戏必须解析出三个不同的 game_id！");
+        assertEquals(3, icons.size(), "三个不同游戏必须返回三个不同的图标！");
+
+        // 4. 【管理员待接单列表】必须带出游戏图标与陪玩师联系方式(供线下通知)
+        //    注意: 技能归属于 clientUserId, 因此由另一方 companionUserId 充当客户下单
+        CreateOrderDTO iconOrderDTO = new CreateOrderDTO();
+        iconOrderDTO.setCompanionUserId(clientUserId);
+        iconOrderDTO.setSkillId(skillViews.get(0).getId());
+        iconOrderDTO.setQuantity(1);
+        iconOrderDTO.setGameServer("微信区");
+        iconOrderDTO.setGameAccount("图标校验订单");
+        PaymentResultVO iconPay = companionOrderService.createAndPayOrder(companionUserId, iconOrderDTO);
+
+        var pendingOrders = adminDashboardService.getPendingAcceptOrders(1, 50);
+        var matched = pendingOrders.getRecords().stream()
+                .filter(o -> iconPay.getOrderSn().equals(o.getOrderSn()))
+                .findFirst();
+        assertTrue(matched.isPresent(), "管理员待接单列表必须包含该订单！");
+        assertNotNull(matched.get().getGameIcon(), "管理员待接单列表必须带出游戏图标！");
+        assertNotNull(matched.get().getCompanionPhone(), "管理员待接单列表必须带出陪玩师手机号(供线下通知)！");
+
+        System.out.println("✅ 游戏字典自愈与图标关联正确性测试全部通过！");
     }
 }
