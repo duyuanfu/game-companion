@@ -2,9 +2,15 @@
   <view class="container">
     <!-- 用户个人信息卡片 (完全来自数据库真实数据) -->
     <view class="profile-card">
-      <image class="avatar" :src="userInfo.avatarUrl || defaultAvatar" />
+      <view class="avatar-wrap" @click="handleChangeAvatar">
+        <image class="avatar" :src="userInfo.avatarUrl || defaultAvatar" />
+        <view class="avatar-edit-badge">✎</view>
+      </view>
       <view class="info-content">
-        <text class="nickname">{{ userInfo.nickname || '正在同步档案...' }}</text>
+        <view class="nickname-row" @click="handleChangeNickname">
+          <text class="nickname">{{ userInfo.nickname || '正在同步档案...' }}</text>
+          <text class="edit-badge">✎</text>
+        </view>
         <view v-if="userInfo.phone" class="phone-tag" @click="openPhoneModal('修改绑定手机号', '请输入新的11位手机号码用于短信提醒')">
           <text class="phone-text">📱 {{ formatPhone(userInfo.phone) }}</text>
         </view>
@@ -68,7 +74,7 @@
           <text class="entry-icon">🎙️</text>
           <view class="entry-text">
             <text class="main-title">成为开黑陪练师</text>
-            <text class="sub-title">录制原声与段位，开启接单收益自由提现</text>
+            <text class="sub-title">上传游戏段位，开启接单收益自由提现</text>
           </view>
         </view>
         <view class="entry-btn">去申请 ›</view>
@@ -127,14 +133,48 @@
         </view>
       </view>
     </view>
+    <!-- 自定义昵称修改弹窗 -->
+    <view class="custom-modal-mask" v-if="showNicknameModal" @click="closeNicknameModal">
+      <view class="custom-modal-card" @click.stop>
+        <view class="modal-title">修改昵称</view>
+        <text class="modal-sub-tip">1~20 个字符，昵称会展示在首页陪练卡片与聊天记录中</text>
+
+        <view class="nickname-input-box">
+          <text class="phone-icon">✏️</text>
+          <input
+            class="phone-digit-input"
+            type="text"
+            maxlength="20"
+            v-model="inputNickname"
+            placeholder="请输入新的昵称"
+            confirm-type="done"
+            @confirm="confirmSaveNickname"
+          />
+          <text v-if="inputNickname" class="clear-icon" @click="inputNickname = ''">✕</text>
+        </view>
+
+        <view class="modal-btn-row">
+          <button class="modal-btn cancel" @click="closeNicknameModal">取消</button>
+          <button
+            class="modal-btn confirm"
+            :disabled="!inputNickname.trim()"
+            :class="{ active: !!inputNickname.trim() }"
+            @click="confirmSaveNickname"
+          >
+            保存
+          </button>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
-import { getUserInfoApi, mockSwitchRoleApi, bindPhoneApi, type UserInfo } from '../../api/user';
+import { getUserInfoApi, mockSwitchRoleApi, bindPhoneApi, updateProfileApi, type UserInfo } from '../../api/user';
 import { execSilentLogin } from '../../utils/request';
+import { uploadFile } from '../../utils/upload';
 
 const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80';
 
@@ -151,6 +191,9 @@ const showPhoneModal = ref(false);
 const inputPhoneNumber = ref('');
 const phoneModalTitle = ref('绑定手机号');
 const phoneModalTip = ref('请输入11位手机号码用于接单短信提醒');
+
+const showNicknameModal = ref(false);
+const inputNickname = ref('');
 
 function openPhoneModal(title = '绑定手机号', tip = '请输入11位手机号码用于接单短信提醒') {
   phoneModalTitle.value = title;
@@ -175,6 +218,75 @@ function confirmBindManualPhone() {
     submitBindPhone('', phone, validId);
   }).catch(() => {
     submitBindPhone('', phone);
+  });
+}
+
+/**
+ * 【自助修改头像】选择图片 -> 上传服务器 -> 更新当前登录用户的头像
+ */
+function handleChangeAvatar() {
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    success: (res) => {
+      const tempPath = res.tempFilePaths[0];
+      if (!tempPath) return;
+      uni.showLoading({ title: '正在上传头像...' });
+      uploadFile(tempPath).then((avatarUrl) => {
+        uni.hideLoading();
+        saveProfile({ nickname: userInfo.value.nickname, avatarUrl });
+      }).catch((err: any) => {
+        uni.hideLoading();
+        console.error('头像上传失败:', err);
+        uni.showToast({ title: err?.message || '头像上传失败', icon: 'none' });
+      });
+    }
+  });
+}
+
+/**
+ * 【自助修改昵称】
+ */
+function handleChangeNickname() {
+  inputNickname.value = userInfo.value.nickname || '';
+  showNicknameModal.value = true;
+}
+
+function closeNicknameModal() {
+  showNicknameModal.value = false;
+  inputNickname.value = '';
+}
+
+function confirmSaveNickname() {
+  const nickname = (inputNickname.value || '').trim();
+  if (!nickname) {
+    uni.showToast({ title: '昵称不能为空', icon: 'none' });
+    return;
+  }
+  if (nickname.length > 20) {
+    uni.showToast({ title: '昵称长度不能超过 20 个字符', icon: 'none' });
+    return;
+  }
+  showNicknameModal.value = false;
+  saveProfile({ nickname });
+}
+
+/**
+ * 提交资料修改 (后端以登录会话为准，只能改自己的资料)
+ */
+function saveProfile(payload: { nickname: string; avatarUrl?: string }) {
+  uni.showLoading({ title: '保存中...' });
+  updateProfileApi(payload).then((res) => {
+    uni.hideLoading();
+    if (res.data) {
+      userInfo.value = res.data;
+    }
+    uni.showToast({ title: '资料已更新！', icon: 'success' });
+    loadUserData();
+  }).catch((err: any) => {
+    uni.hideLoading();
+    console.error('修改资料失败:', err);
+    uni.showToast({ title: err?.message || '保存失败，请稍后重试', icon: 'none' });
   });
 }
 
@@ -354,17 +466,57 @@ onPullDownRefresh(() => {
   border-radius: 20rpx;
   margin-bottom: 24rpx;
 }
+.avatar-wrap {
+  position: relative;
+  margin-right: 24rpx;
+}
 .avatar {
   width: 120rpx;
   height: 120rpx;
   border-radius: 60rpx;
-  margin-right: 24rpx;
+}
+.avatar-edit-badge {
+  position: absolute;
+  right: -4rpx;
+  bottom: -4rpx;
+  width: 36rpx;
+  height: 36rpx;
+  line-height: 36rpx;
+  text-align: center;
+  border-radius: 18rpx;
+  background: #6366f1;
+  color: #ffffff;
+  font-size: 22rpx;
+  border: 3rpx solid #ffffff;
+}
+.nickname-row {
+  display: flex;
+  align-items: center;
 }
 .nickname {
   font-size: 36rpx;
   font-weight: bold;
   color: #111827;
   display: block;
+}
+.edit-badge {
+  margin-left: 12rpx;
+  font-size: 24rpx;
+  color: #9ca3af;
+}
+.nickname-input-box {
+  display: flex;
+  align-items: center;
+  background: #f3f4f6;
+  border-radius: 14rpx;
+  padding: 0 20rpx;
+  margin: 24rpx 0;
+  border: 2rpx solid transparent;
+  transition: border-color 0.2s;
+}
+.nickname-input-box:focus-within {
+  border-color: #6366f1;
+  background: #ffffff;
 }
 .phone-tag {
   margin-top: 8rpx;

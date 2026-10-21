@@ -103,10 +103,10 @@
           <text class="field-val">{{ item.bio }}</text>
         </view>
 
-        <!-- 手机端在线试听录音 (真实播放数据库音频) -->
-        <view class="voice-listen-box" @click="togglePlayVoice(item.voiceUrl)">
-          <text class="voice-icon">{{ isPlaying ? '⏸ 暂停' : '▶ 点击试听申请人原声' }}</text>
-          <text class="voice-duration">({{ item.voiceDuration }}秒)</text>
+        <!-- 手机端在线试听录音 (真实播放数据库音频；未录制时明确标注) -->
+        <view class="voice-listen-box" :class="{ 'no-voice': !item.voiceUrl }" @click="togglePlayVoice(item.voiceUrl)">
+          <text class="voice-icon">{{ !item.voiceUrl ? '🚫 申请人未录制原声 (选填项)' : (isPlaying ? '⏸ 暂停' : '▶ 点击试听申请人原声') }}</text>
+          <text v-if="item.voiceUrl" class="voice-duration">({{ item.voiceDuration }}秒)</text>
         </view>
 
         <!-- 单图兜底凭证 -->
@@ -626,6 +626,12 @@ onPullDownRefresh(() => {
   margin: 16rpx 0;
   font-size: 26rpx;
   font-weight: bold;
+}
+/* 申请人未录制原声 (选填项未填) */
+.voice-listen-box.no-voice {
+  background: #f3f4f6;
+  color: #9ca3af;
+  font-weight: normal;
 }
 .rank-img-box {
   position: relative;

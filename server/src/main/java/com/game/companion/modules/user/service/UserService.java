@@ -17,4 +17,11 @@ public interface UserService extends IService<SysUser> {
      * 微信 getPhoneNumber 原生组件一键绑定手机号 (防漏单)
      */
     String bindWxPhoneNumber(Long userId, BindPhoneDTO dto);
+
+    /**
+     * 用户自助修改头像与昵称 (仅限本人)
+     *
+     * @return 更新后的用户档案
+     */
+    SysUser updateProfile(Long userId, com.game.companion.modules.user.dto.UpdateProfileDTO dto);
 }

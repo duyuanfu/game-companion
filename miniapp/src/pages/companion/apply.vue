@@ -21,13 +21,16 @@
         <textarea class="textarea" v-model="form.bio" placeholder="如: 声音温柔听话，擅长中单辅助，输赢都不压力~" />
       </view>
 
-      <!-- 核心环节：真实原声录音与试听 (无任何虚假兜底) -->
-      <view class="section-title mt">核心卖点：真实原声录音</view>
+      <!-- 核心环节：真实原声录音与试听 (选填加分项，未录制不阻断申请) -->
+      <view class="section-title-row mt">
+        <view class="section-title">真实原声录音 <text class="optional-tag">选填 · 加分项</text></view>
+        <text class="optional-tip">录一段声音介绍，首页可试听，更容易接到单</text>
+      </view>
       <view class="voice-record-card">
         <view class="record-state">
           <text v-if="isRecording" class="voice-tip recording">🔴 正在录制中... (已录制 {{ recordDuration }} 秒)</text>
           <text v-else-if="form.voiceUrl" class="voice-tip success">✅ 原声音频已就绪 (时长: {{ form.voiceDuration }}秒，点击可试听)</text>
-          <text v-else class="voice-tip">🎙 请录制 3~15 秒您的真实自我介绍原声</text>
+          <text v-else class="voice-tip">🎙 可选：录制 3~15 秒您的真实自我介绍原声</text>
         </view>
         <view class="record-btns">
           <button v-if="!isRecording" class="record-btn start" @click="startRecord">
@@ -95,7 +98,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { applyCompanionApi } from '../../api/companion';
-import { BASE_URL } from '../../utils/request';
+import { uploadFile } from '../../utils/upload';
 
 const games = ['王者荣耀', '英雄联盟', '无畏契约', '和平精英', '永劫无间', '英雄联盟手游'];
 const isRecording = ref(false);
@@ -105,7 +108,7 @@ let recorderManager: any = null;
 let audioContext: any = null;
 const submitting = ref(false);
 
-// 彻底清除任何虚假兜底，未录制前 voiceUrl 严格为空！
+// 未录制时 voiceUrl 严格为空（绝不生成任何虚假音色兜底）
 const form = ref({
   realName: '',
   phone: '',
@@ -264,24 +267,14 @@ function stopRecord() {
 
 function uploadVoiceFile(tempPath: string) {
   uni.showLoading({ title: '正在同步录音至服务器...' });
-  uni.uploadFile({
-    url: BASE_URL + '/file/upload',
-    filePath: tempPath,
-    name: 'file',
-    success: (uploadRes) => {
-      uni.hideLoading();
-      try {
-        const json = JSON.parse(uploadRes.data);
-        if (json && json.code === 200 && json.data) {
-          form.value.voiceUrl = json.data;
-          uni.showToast({ title: '真实原声音频已同步！', icon: 'success' });
-        }
-      } catch (e) {}
-    },
-    fail: (err) => {
-      uni.hideLoading();
-      console.warn('音频上传服务器异常:', err);
-    }
+  uploadFile(tempPath).then((url) => {
+    uni.hideLoading();
+    form.value.voiceUrl = url;
+    uni.showToast({ title: '真实原声音频已同步！', icon: 'success' });
+  }).catch((err: any) => {
+    uni.hideLoading();
+    console.warn('音频上传服务器异常:', err?.message || err);
+    uni.showToast({ title: err?.message || '音频上传失败', icon: 'none' });
   });
 }
 
@@ -302,18 +295,11 @@ function chooseRankImage(index: number) {
     success: (res) => {
       const tempPath = res.tempFilePaths[0];
       skills.value[index].rankImg = tempPath;
-      uni.uploadFile({
-        url: BASE_URL + '/file/upload',
-        filePath: tempPath,
-        name: 'file',
-        success: (uRes) => {
-          try {
-            const data = JSON.parse(uRes.data);
-            if (data && data.code === 200 && data.data) {
-              skills.value[index].rankImg = data.data;
-            }
-          } catch (e) {}
-        }
+      uploadFile(tempPath).then((url) => {
+        skills.value[index].rankImg = url;
+      }).catch((err: any) => {
+        console.warn('段位截图上传失败:', err?.message || err);
+        uni.showToast({ title: err?.message || '截图上传失败', icon: 'none' });
       });
     }
   });
@@ -325,11 +311,8 @@ function handleSubmit() {
     return;
   }
 
-  // 严密校验：必须包含真实录音，绝不兜底
-  if (!form.value.voiceUrl || !form.value.voiceUrl.trim()) {
-    uni.showToast({ title: '请先录制您的真实自我介绍原声', icon: 'none' });
-    return;
-  }
+  // 【原声录音为选填项】未录制不阻断申请，管理员审核时按需核验
+  // (注意：绝不生成任何虚假音色兜底，未录即为未录)
 
   for (let i = 0; i < skills.value.length; i++) {
     const s = skills.value[i];
@@ -364,9 +347,10 @@ function handleSubmit() {
   };
 
   applyCompanionApi(requestData).then(() => {
+    const voiceTip = form.value.voiceUrl ? '与您的真实原声' : '（未录制原声，可稍后在工作台补充）';
     uni.showModal({
       title: '申请已提交！',
-      content: `已成功提交 ${skills.value.length} 个游戏项目与您的真实原声，管理员将在 24 小时内核验，请留意微信通知。`,
+      content: `已成功提交 ${skills.value.length} 个游戏项目${voiceTip}，管理员将在 24 小时内核验，请留意微信通知。`,
       showCancel: false,
       success: () => {
         uni.switchTab({ url: '/pages/my/index' });
@@ -497,6 +481,27 @@ function handleSubmit() {
   font-size: 26rpx;
   box-sizing: border-box;
   margin-top: 12rpx;
+}
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 32rpx;
+}
+.optional-tag {
+  font-size: 20rpx;
+  color: #6366f1;
+  background: #eef2ff;
+  padding: 4rpx 12rpx;
+  border-radius: 20rpx;
+  margin-left: 8rpx;
+}
+.optional-tip {
+  font-size: 22rpx;
+  color: #9ca3af;
+}
+.section-title-row .section-title {
+  margin-top: 0;
 }
 .voice-record-card {
   background: #f9fafb;

@@ -54,6 +54,15 @@ public class UserController {
         return CommonResult.success(phone, "手机号绑定并写入数据库成功");
     }
 
+    @PutMapping("/profile")
+    @Operation(summary = "自助修改头像与昵称 (仅限本人)")
+    public CommonResult<SysUser> updateProfile(@Valid @RequestBody com.game.companion.modules.user.dto.UpdateProfileDTO dto) {
+        // 修改目标只能是当前登录用户本人
+        Long currentUserId = authGuard.currentUserId();
+        SysUser updated = userService.updateProfile(currentUserId, dto);
+        return CommonResult.success(updated, "资料修改成功！");
+    }
+
     @PostMapping("/mock-switch-role")
     @Operation(summary = "【开发环境特权】快速切换当前用户身份 (1-客户 2-陪玩 9-管理员)")
     public CommonResult<String> mockSwitchRole(@RequestParam(required = false) Long userId,

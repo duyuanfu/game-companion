@@ -49,6 +49,20 @@ export function bindPhoneApi(code: string, phone?: string) {
 }
 
 /**
+ * 自助修改头像与昵称 (仅限本人，后端以登录会话为准)
+ */
+export function updateProfileApi(data: {
+  nickname: string;
+  avatarUrl?: string;
+}) {
+  return request<UserInfo>({
+    url: '/user/profile',
+    method: 'PUT',
+    data
+  });
+}
+
+/**
  * 【开发环境特权】切换当前登录用户的角色。
  */
 export function mockSwitchRoleApi(role: number) {

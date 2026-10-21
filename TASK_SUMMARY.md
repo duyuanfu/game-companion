@@ -63,6 +63,16 @@
 14. **全页面顶部下拉刷新与手机端实时财务大盘**：
     - 全平台所有核心页面全量开启并接入顶部下拉刷新（`onPullDownRefresh`）；
     - 手机端经营看板直观核算：今日订单量、今日交易流水、平台毛抽佣、**微信通道扣费 (0.6%)**、**今日实际净利润**。
+15. **用户自助修改头像与昵称**：
+    - 个人中心头像与昵称均可点击直接编辑，头像走「选图 → 上传 → 落库」，昵称走自研弹窗；
+    - 新增 `PUT /api/user/profile` 接口，身份只认当前登录会话，**彻底杜绝修改他人资料**；
+    - 昵称接入微信官方 `msgSecCheck` 内容安全检测，非法头像协议（`javascript:` 等）一律拦截；
+    - 新昵称/头像实时联动首页陪练卡片、订单详情与聊天室消息展示。
+16. **陪练师入驻原声录音改为选填加分项**：
+    - 移除前端「必须录制原声否则不允许提交」的硬拦截，未录音同样可提交入驻申请；
+    - 未录制时 `voice_url` 保持 `NULL`、`voice_duration` 为 0，**严禁任何虚假音色兜底**；
+    - 首页对未录制者降级为灰色「暂未录制原声」样式，管理员审核台明确标注「申请人未录制原声 (选填项)」；
+    - 真实姓名、手机号、至少一个游戏项目及其段位截图仍为必填的资质核验底线。
 
 ---
 
@@ -111,7 +121,7 @@
 全部业务代码在本地通过 Maven 和 JDK 17 完成了端到端自动化单元测试验证：
 * **测试类**：`server/src/test/java/com/game/companion/OrderFlowIntegrationTest.java`
 * **执行命令**：`mvn test -Dtest=OrderFlowIntegrationTest`
-* **测试结果**：**`Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
+* **测试结果**：**`Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
 
 ```text
 [INFO] -------------------------------------------------------
@@ -130,6 +140,7 @@
 ✅ test11_PlatformDynamicConfigHotUpdateTest: 管理员后台热配置保存与秒级生效 (通过)
 ✅ test12_OrderStateMachineAndAuthorizationGuard: 状态机跳步拦截 + 越权接单/越权结单/重复清算拦截 (通过)
 ✅ test13_CommissionHotConfigActuallyAffectsSettlement: 抽佣热配置真实影响清算金额校验 (通过)
+✅ test14_UpdateProfileAndOptionalVoice: 自助改头像昵称 + 陪练入驻录音选填 + 自定义昵称不被入驻覆盖 (通过)
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------

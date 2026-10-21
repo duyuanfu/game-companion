@@ -46,13 +46,13 @@
             <text class="badge highlight">{{ item.rank }}</text>
           </view>
 
-          <!-- 核心特色：声音试听条 (动态真实播放音频) -->
-          <view class="voice-bar" @click="playVoice(item)">
+          <!-- 核心特色：声音试听条 (未上传原声时降级为「未录制」展示) -->
+          <view class="voice-bar" :class="{ 'no-voice': !item.voiceUrl }" @click="playVoice(item)">
             <view class="voice-wave-icon">
               <text :class="['wave-icon', isPlayingId === item.id ? 'animating' : '']"></text>
             </view>
-            <text class="voice-text">{{ isPlayingId === item.id ? '正在播放原声...' : '点击试听声音' }}</text>
-            <text class="voice-duration">{{ item.voiceDuration }}"</text>
+            <text class="voice-text">{{ !item.voiceUrl ? '暂未录制原声' : (isPlayingId === item.id ? '正在播放原声...' : '点击试听声音') }}</text>
+            <text v-if="item.voiceUrl" class="voice-duration">{{ item.voiceDuration }}"</text>
           </view>
 
           <!-- 个性签名与底部下单 -->
@@ -120,7 +120,7 @@ function handleCategoryChange(game: string) {
 
 function playVoice(item: CompanionItem) {
   if (!item.voiceUrl) {
-    uni.showToast({ title: '暂未上传语音介绍', icon: 'none' });
+    uni.showToast({ title: '该陪练师暂未录制原声介绍', icon: 'none' });
     return;
   }
 
@@ -288,6 +288,16 @@ onMounted(() => {
   border-radius: 28rpx;
   margin-top: 14rpx;
   width: 75%;
+}
+/* 未录制原声的陪练师：降级为中性灰样式，避免误导用户以为可播放 */
+.voice-bar.no-voice {
+  background: #f3f4f6;
+}
+.voice-bar.no-voice .voice-text {
+  color: #9ca3af;
+}
+.voice-bar.no-voice .wave-icon {
+  background: #d1d5db;
 }
 .voice-text {
   font-size: 24rpx;

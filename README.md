@@ -201,6 +201,29 @@ $$
 ### 2. UnionID 线上空值防崩溃机制
 微信若未绑定开放平台，返回的 `unionid` 为空。后端在 `UserServiceImpl` 中内置了 `normalizeUnionid` 安全过滤，若为空串或 `"null"` 一律归一化为 Java 的 `null`，配合数据库 `DEFAULT NULL`，彻底杜绝了因空字符串触发 MySQL `uk_unionid` 唯一索引硬崩溃的问题。
 
+### 3. 用户自助修改头像与昵称
+任何登录用户（含普通客户）都可在「个人中心」自行维护展示资料：
+
+| 能力 | 交互 | 接口 |
+| :--- | :--- | :--- |
+| 换头像 | 点击头像 → `uni.chooseImage` → 上传至 `/file/upload` → 落库 | `PUT /api/user/profile` |
+| 改昵称 | 点击昵称 → 自研弹窗输入 → 落库 | `PUT /api/user/profile` |
+
+* **身份安全**：接口只认当前登录会话，**无法修改他人资料**（`userId` 覆盖参数已彻底移除）
+* **入参校验**：昵称 1~20 字符且不可全空白；头像地址必须为 `http/https`（拦截 `javascript:` 等协议注入）
+* **内容合规**：昵称提交时接入微信官方 `msgSecCheck` 内容安全检测；微信接口不可用时降级放行并告警，不阻断正常用户
+* **展示联动**：新昵称/头像即时生效于首页陪练卡片、订单详情、聊天室消息（`chat_message.sender_name` / `sender_avatar` 在发送时从数据库实时取）
+
+> ⚠️ `uni.uploadFile` **不会**自动携带 `satoken`，所有上传必须走统一封装
+> `miniapp/src/utils/upload.ts`（已内置 token header），否则会因未登录而静默失败。
+
+### 4. 陪练师入驻：原声录音为「选填加分项」
+* **不强制**：未录制原声同样可以提交入驻申请，**不阻断任何流程**
+* **不造假**：未录制时 `companion_profile.voice_url` 保持 `NULL`、`voice_duration` 为 `0`，
+  **绝不生成任何虚假音色兜底**（历史版本曾用假 mp3 冒充用户原声，已彻底下线）
+* **降级展示**：首页陪练卡片对未录制者显示灰色「暂未录制原声」样式；管理员审核台显示「申请人未录制原声 (选填项)」
+* **仍然必填**：真实姓名、手机号、至少 1 个游戏项目及其段位与段位截图（这是资质核验的底线，不可妥协）
+
 ---
 
 ## 六、 微信小程序账号申请、主体类目与工信部备案保姆级指南
@@ -270,7 +293,7 @@ $env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
 全部业务逻辑在本地通过 Maven 和 JDK 17 完成了端到端全链路自动化单元测试：
 * **测试用例类**：`server/src/test/java/com/game/companion/OrderFlowIntegrationTest.java`
 * **执行命令**：`mvn test -Dtest=OrderFlowIntegrationTest`
-* **测试结论**：**`Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
+* **测试结论**：**`Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, BUILD SUCCESS`**
 
 ```text
 [INFO] -------------------------------------------------------
@@ -289,6 +312,7 @@ $env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
 ✅ test11_PlatformDynamicConfigHotUpdateTest: 管理员后台热配置保存与秒级生效 (通过)
 ✅ test12_OrderStateMachineAndAuthorizationGuard: 状态机跳步拦截 + 越权接单/越权结单/重复清算拦截 (通过)
 ✅ test13_CommissionHotConfigActuallyAffectsSettlement: 抽佣比例热配置真实影响清算金额 (通过)
+✅ test14_UpdateProfileAndOptionalVoice: 自助改头像昵称 + 陪练入驻录音选填 + 自定义昵称不被覆盖 (通过)
 [INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
 [INFO] ------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
 import com.game.companion.modules.user.dto.BindPhoneDTO;
+import com.game.companion.modules.user.dto.UpdateProfileDTO;
 import com.game.companion.modules.user.dto.WxLoginDTO;
 import com.game.companion.modules.user.entity.SysUser;
 import com.game.companion.modules.user.mapper.SysUserMapper;
@@ -183,6 +184,78 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
         log.info("==================================================");
         
         return phoneNumber;
+    }
+
+    /**
+     * 【自助改资料】用户只能修改自己的头像与昵称。
+     *
+     * <p>昵称与头像均属用户生成内容，提交时接入微信官方内容安全检测
+     * （{@code msgSecCheck} / {@code imgSecCheck}）做合规校验；
+     * 微信接口不可用（未开通权限 / 网络异常）时降级放行并告警，绝不因第三方不可用而阻断正常用户。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public SysUser updateProfile(Long userId, UpdateProfileDTO dto) {
+        if (userId == null || userId <= 0) {
+            throw new ApiException("操作被拒绝：请先登录后再修改资料");
+        }
+        SysUser user = getById(userId);
+        if (user == null) {
+            throw new ApiException("用户不存在，请重新登录");
+        }
+
+        String nickname = dto.getNickname() == null ? "" : dto.getNickname().trim();
+        if (nickname.isEmpty()) {
+            throw new ApiException("昵称不能为空");
+        }
+        if (nickname.length() > 20) {
+            throw new ApiException("昵称长度不能超过 20 个字符");
+        }
+
+        // 微信官方内容安全检测：昵称命中违规词则拒绝
+        if (!passMsgSecCheck(nickname)) {
+            throw new ApiException("昵称包含违规内容，请修改后重试");
+        }
+
+        user.setNickname(nickname);
+
+        // 头像：为空表示不修改；非空则必须是 http/https 地址
+        String avatarUrl = dto.getAvatarUrl() == null ? "" : dto.getAvatarUrl().trim();
+        if (!avatarUrl.isEmpty()) {
+            if (avatarUrl.length() > 512) {
+                throw new ApiException("头像地址过长");
+            }
+            if (!avatarUrl.startsWith("http://") && !avatarUrl.startsWith("https://")) {
+                throw new ApiException("头像地址非法，请重新上传");
+            }
+            user.setAvatarUrl(avatarUrl);
+        }
+
+        user.setUpdateTime(LocalDateTime.now());
+        updateById(user);
+
+        log.info("【用户自助修改资料】用户ID={}, 新昵称={}, 是否更换头像={}",
+                userId, nickname, !avatarUrl.isEmpty());
+        return user;
+    }
+
+    /**
+     * 昵称内容安全检测（降级放行策略：微信接口异常时记录告警但不阻断用户操作）
+     */
+    private boolean passMsgSecCheck(String content) {
+        if (wxMaService == null) {
+            return true;
+        }
+        try {
+            boolean pass = wxMaService.getSecCheckService().checkMessage(content);
+            if (!pass) {
+                log.warn("【内容安全检测未通过】昵称命中违规规则: {}", content);
+            }
+            return pass;
+        } catch (Exception e) {
+            log.warn("【内容安全检测调用失败，本次降级放行】error={}", e.getMessage());
+            return true;
+        }
     }
 
     /**

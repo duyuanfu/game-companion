@@ -1,6 +1,7 @@
 package com.game.companion;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import cn.hutool.core.util.RandomUtil;
 import com.game.companion.common.enums.OrderStatusEnum;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
@@ -828,5 +829,85 @@ public class OrderFlowIntegrationTest {
         platformConfigService.savePlatformConfig(restore);
 
         System.out.println("✅ 抽佣比例热配置对清算结果的真实影响验证通过！");
+    }
+
+    /**
+     * 【单元测试 14】用户自助修改头像与昵称 + 陪练师入驻录音选填
+     */
+    @Test
+    @Order(14)
+    public void test14_UpdateProfileAndOptionalVoice() {
+        System.out.println("\n========== [单元测试 14: 自助改头像昵称 + 陪练入驻录音选填测试] ==========");
+
+        // 1. 自助修改昵称与头像
+        var updateDTO = new com.game.companion.modules.user.dto.UpdateProfileDTO();
+        updateDTO.setNickname("小鹿本鹿" + RandomUtil.randomNumbers(3));
+        updateDTO.setAvatarUrl("https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=200&q=80");
+
+        SysUser updated = userService.updateProfile(clientUserId, updateDTO);
+        assertNotNull(updated);
+        assertEquals(updateDTO.getNickname(), updated.getNickname(), "昵称必须被真实更新到数据库");
+        assertEquals(updateDTO.getAvatarUrl(), updated.getAvatarUrl(), "头像必须被真实更新到数据库");
+
+        // 2. 再次查询确认持久化
+        SysUser reread = userService.getById(clientUserId);
+        assertEquals(updateDTO.getNickname(), reread.getNickname(), "昵称修改必须持久化");
+        assertEquals(updateDTO.getAvatarUrl(), reread.getAvatarUrl(), "头像修改必须持久化");
+
+        // 3. 非法昵称必须被拦截
+        var emptyDTO = new com.game.companion.modules.user.dto.UpdateProfileDTO();
+        emptyDTO.setNickname("   ");
+        assertThrows(ApiException.class, () -> {
+            userService.updateProfile(clientUserId, emptyDTO);
+        }, "空昵称必须被拦截！");
+
+        var tooLongDTO = new com.game.companion.modules.user.dto.UpdateProfileDTO();
+        tooLongDTO.setNickname("a".repeat(50));
+        assertThrows(ApiException.class, () -> {
+            userService.updateProfile(clientUserId, tooLongDTO);
+        }, "超长昵称必须被拦截！");
+
+        // 4. 非法头像地址必须被拦截
+        var badAvatarDTO = new com.game.companion.modules.user.dto.UpdateProfileDTO();
+        badAvatarDTO.setNickname("合法昵称");
+        badAvatarDTO.setAvatarUrl("javascript:alert(1)");
+        assertThrows(ApiException.class, () -> {
+            userService.updateProfile(clientUserId, badAvatarDTO);
+        }, "非 http/https 的头像地址必须被拦截！");
+
+        // 5. 【陪练入驻】未录制原声也必须允许提交申请（录音为选填项）
+        var applyDTO = new com.game.companion.modules.companion.dto.ApplyCompanionDTO();
+        applyDTO.setRealName("无原声陪练");
+        applyDTO.setPhone("13800000009");
+        applyDTO.setBio("未录制原声也可申请");
+        applyDTO.setVoiceUrl(null);   // 明确不提供录音
+        applyDTO.setVoiceDuration(null);
+
+        var skill = new com.game.companion.modules.companion.dto.ApplyCompanionDTO.SkillItemDTO();
+        skill.setGameName("王者荣耀");
+        skill.setRankName("最强王者 35星");
+        skill.setPrice(25);
+        skill.setPriceUnit("YUAN");
+        skill.setUnit("小时");
+        skill.setRankImg("https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=600&q=80");
+        applyDTO.setSkills(java.util.List.of(skill));
+
+        // 不应抛出异常
+        companionService.applyCompanion(clientUserId, applyDTO);
+
+        CompanionProfile profileAfter = companionProfileMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<CompanionProfile>()
+                        .eq(CompanionProfile::getUserId, clientUserId)
+        );
+        assertNotNull(profileAfter);
+        assertNull(profileAfter.getVoiceUrl(), "未录制原声时必须保持为空，严禁生成任何虚假音色兜底！");
+        assertEquals(0, profileAfter.getVoiceDuration().intValue(), "未录制原声时时长必须为 0");
+
+        // 6. 【尊重自定义昵称】入驻申请不得把用户自己改过的昵称静默覆盖成实名
+        SysUser afterApply = userService.getById(clientUserId);
+        assertEquals(updateDTO.getNickname(), afterApply.getNickname(),
+                "用户在个人中心自定义的昵称，入驻申请时必须被保留，不得被实名覆盖！");
+
+        System.out.println("✅ 自助改头像昵称与「陪练入驻录音选填」测试全部通过！");
     }
 }
