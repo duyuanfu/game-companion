@@ -38,6 +38,8 @@ public class AuthInterceptorConfig implements WebMvcConfigurer {
             "/companion/skills",
             // 多媒体流式直读（真机试听原声、战绩截图预览）
             "/file/download/**",
+            // 服务自检（小程序端用于确认 BASE_URL 指向的后端身份是否正确）
+            "/health",
             // 微信支付 V3 异步回调（由微信服务器调用，请求体经官方 RSA 验签 + AES-GCM 解密校验）
             "/pay/notify",
             // 错误页与接口文档

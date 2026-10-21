@@ -13,6 +13,8 @@ export interface ApiResponse<T = any> {
 // 全局静默登录互斥锁与刷新等待队列，彻底消除冷启动与Token失效时的并发竞态
 let isSilentLogging = false;
 let waitQueue: Array<(token: string) => void> = [];
+/** 后端身份自检是否已提示过（同一会话只提示一次） */
+let hasDiagnosed = false;
 
 /**
  * 执行底层原生微信静默登录
@@ -61,6 +63,56 @@ export function execSilentLogin(): Promise<string> {
 }
 
 /**
+ * 【后端身份自检】
+ *
+ * <p>当 401 自动静默重登仍然失败时，说明问题多半不在登录态，而在「BASE_URL 指向了别的服务」
+ * （例如本机 8080 端口被其它项目占用）。此时调用后端自检接口 /health 比对服务标识，
+ * 给出可直接定位的提示，避免用户只看到一句莫名其妙的「请先登录或凭证已失效」。</p>
+ */
+export function diagnoseBackend(): Promise<void> {
+  // 同一会话只提示一次，避免用户被反复弹窗打扰
+  if (hasDiagnosed) {
+    return Promise.resolve();
+  }
+  hasDiagnosed = true;
+
+  return new Promise<void>((resolve) => {
+    uni.request({
+      url: BASE_URL + '/health',
+      method: 'GET',
+      timeout: 8000,
+      success: (res: any) => {
+        const data = res && res.data ? res.data.data : null;
+        if (data && data.app === 'game-companion') {
+          // 后端身份正确，问题大概率出在微信侧登录态本身
+          uni.showModal({
+            title: '登录状态异常',
+            content: `后端服务连接正常（${BASE_URL}），但自动登录未成功。\n\n请尝试：\n1. 完全退出小程序后重新扫码进入；\n2. 微信开发者工具中清空缓存后重新编译；\n3. 确认后端日志中「微信官方 API 换取 session 失败」是否报错（多为 AppID/Secret 不匹配）。`,
+            showCancel: false
+          });
+        } else {
+          const actual = data ? (data.name || data.app) : '未知服务';
+          uni.showModal({
+            title: '后端地址配置错误',
+            content: `当前 BASE_URL：${BASE_URL}\n指向的服务是「${actual}」，而不是「开黑搭子 (Game Companion)」！\n\n请修改 miniapp/src/config/env.ts 中的后端地址，使其与后端启动日志中的「小程序 BASE_URL 必须配置为」保持一致。`,
+            showCancel: false
+          });
+        }
+        resolve();
+      },
+      fail: () => {
+        uni.showModal({
+          title: '后端服务无法连接',
+          content: `无法连接后端服务 (${BASE_URL})。\n\n请确认：\n1. 电脑端后端已启动（启动日志中会打印正确的 BASE_URL）；\n2. 手机与电脑处于同一 WiFi 局域网；\n3. 端口与 miniapp/src/config/env.ts 中的配置一致。`,
+          showCancel: false
+        });
+        resolve();
+      }
+    });
+  });
+}
+
+/**
  * 统一网络请求封装 (内置 401 自动静默重登自愈)
  */
 export function request<T = any>(options: {
@@ -96,10 +148,13 @@ export function request<T = any>(options: {
                   waitQueue = [];
                   // 重试当前请求
                   doRequest(newToken);
-                }).catch(() => {
+                }).catch((loginErr) => {
                   isSilentLogging = false;
                   waitQueue = [];
-                  reject(responseData);
+                  // 静默重登也失败：极可能是 BASE_URL 指向了别的服务，做一次身份自检给出明确提示
+                  diagnoseBackend().finally(() => {
+                    reject(responseData);
+                  });
                 });
               } else {
                 // 已有正在进行的静默登录，入队等待重试

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app';
-import { execSilentLogin } from './utils/request';
+import { execSilentLogin, diagnoseBackend } from './utils/request';
 import { getMyOrdersApi } from './api/order';
 
 let globalOrderWatcherTimer: any = null;
@@ -18,6 +18,8 @@ onLaunch(() => {
     }
   }).catch(err => {
     console.warn('初次静默登录排队:', err);
+    // 静默登录失败时做一次后端身份自检，明确区分「后端地址指错」与「登录态异常」
+    diagnoseBackend();
   });
 });
 

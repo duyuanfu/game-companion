@@ -1,5 +1,8 @@
 server:
-  port: 8080
+  # ⚠️ 默认端口刻意避开 8080：本机 8080 常被其它项目占用，
+  #    一旦小程序 BASE_URL 指错端口，前端会连到完全不相干的服务上（表现为「请先登录或凭证已失效」）。
+  #    可通过环境变量 SERVER_PORT 覆盖。
+  port: ${SERVER_PORT:8088}
   servlet:
     context-path: /api
 
