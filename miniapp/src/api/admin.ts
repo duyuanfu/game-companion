@@ -26,9 +26,43 @@ export function getDashboardSummaryApi() {
   });
 }
 
+/**
+ * 【平台线下通知】待通知事件队列
+ * 微信订阅消息为一次性机制已下线，所有需触达用户的事件改由平台人工线下通知。
+ */
+export interface NoticeItem {
+  id: number;
+  orderSn: string;
+  noticeType: number;
+  typeText: string;
+  title: string;
+  content: string;
+  targetUserId: number;
+  userName: string;
+  phone?: string;
+  amount?: number;
+  createTime: string;
+}
+
+export function getPendingNoticesApi(limit = 50) {
+  return request<NoticeItem[]>({
+    url: `/admin/notice/pending?limit=${limit}`,
+    method: 'GET'
+  });
+}
+
+export function ackNoticeApi(noticeId: number, remark?: string) {
+  return request({
+    url: `/admin/notice/ack?noticeId=${noticeId}${remark ? '&remark=' + encodeURIComponent(remark) : ''}`,
+    method: 'POST'
+  });
+}
+
 export interface PlatformConfig {
   paymentMode: string;
   commissionPercent: number;
+  /** 微信支付通道费率 (百分比数字，如 0.6 代表 0.6%) */
+  channelFeePercent?: number;
   appId: string;
   appSecret: string;
   mchId: string;

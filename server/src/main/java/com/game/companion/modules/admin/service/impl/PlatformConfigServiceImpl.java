@@ -26,6 +26,9 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
     @Value("${platform.commission-rate:0.10}")
     private Double defaultCommissionRate;
 
+    @Value("${platform.channel-fee-rate:0.006}")
+    private Double defaultChannelFeeRate;
+
     @Value("${wx.miniapp.appid:}")
     private String defaultAppId;
 
@@ -53,6 +56,14 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
             dto.setCommissionPercent(10.0);
         }
 
+        // 微信通道费率 (合同费率预估值, 可按商户实际合同调整)
+        String channelFeeStr = getConfig("platform.channel-fee-rate", String.valueOf(defaultChannelFeeRate * 100));
+        try {
+            dto.setChannelFeePercent(Double.parseDouble(channelFeeStr));
+        } catch (Exception e) {
+            dto.setChannelFeePercent(0.6);
+        }
+
         dto.setAppId(getConfig("wx.miniapp.appid", defaultAppId));
         dto.setAppSecret(getConfig("wx.miniapp.secret", defaultAppSecret));
         dto.setMchId(getConfig("wx.pay.mchid", defaultMchId));
@@ -71,6 +82,10 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
         }
         if (dto.getCommissionPercent() != null) {
             saveOrUpdateConfig("platform.commission-percent", String.valueOf(dto.getCommissionPercent()), "平台抽佣比例(%)");
+        }
+        if (dto.getChannelFeePercent() != null) {
+            saveOrUpdateConfig("platform.channel-fee-rate", String.valueOf(dto.getChannelFeePercent()),
+                    "微信支付通道费率(%)，合同费率预估值，最终以微信交易账单对账为准");
         }
         if (dto.getAppId() != null) {
             saveOrUpdateConfig("wx.miniapp.appid", dto.getAppId().trim(), "小程序AppID");

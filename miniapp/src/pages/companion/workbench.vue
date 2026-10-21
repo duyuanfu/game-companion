@@ -12,18 +12,15 @@
       <text class="alert-btn">去接单 ›</text>
     </view>
 
-    <!-- 🔔 微信官方订阅消息专属授权卡片 (由用户显式点击触发，带防抖与纯同步调用) -->
+    <!-- 📢 接单通知说明卡片 (微信订阅消息为一次性机制已下线, 改为平台线下通知兜底) -->
     <view class="subscribe-notify-card">
       <view class="notify-card-left">
-        <text class="bell-icon">🔔</text>
+        <text class="bell-icon">📢</text>
         <view class="notify-card-text">
-          <text class="notify-title">开启微信新订单服务通知</text>
-          <text class="notify-desc">点击授权后，新订单将直接推送到您的手机微信！</text>
+          <text class="notify-title">新订单通知方式</text>
+          <text class="notify-desc">微信订阅消息为一次性机制已下线。站内会即时提醒您（角标+震动），同时平台管理员会收到通知并电话联系您，请保持手机畅通！</text>
         </view>
       </view>
-      <button class="notify-auth-btn" :loading="isSubscribing" @click.stop="handleDirectSubscribe">
-        立即订阅
-      </button>
     </view>
 
     <!-- 接单状态卡片 (真实数据库 is_online) -->
@@ -104,7 +101,6 @@ import { onShow, onHide, onUnload, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getWorkbenchStatsApi, toggleOnlineStatusApi } from '../../api/companion';
 import { getMyOrdersApi } from '../../api/order';
 import { applyWithdrawApi } from '../../api/wallet';
-import { guideSubscribeNewOrder, silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const stats = ref<any>({
   isOnline: true,
@@ -119,7 +115,6 @@ const stats = ref<any>({
 });
 
 const pendingOrders = ref<any[]>([]);
-const isSubscribing = ref(false);
 
 let workbenchTimer: any = null;
 let lastKnownBalance = 0;
@@ -180,8 +175,6 @@ function loadStats() {
 }
 
 function goToPendingOrder() {
-  // 静默为陪练师补充通知配额
-  silentAccumulateSubscribeQuota();
   if (pendingOrders.value.length > 0) {
     const firstOrderSn = pendingOrders.value[0].orderSn;
     uni.navigateTo({
@@ -196,65 +189,8 @@ function goToMyCompanionOrders() {
   });
 }
 
-// 🌟 核心修复：纯同步手势触发 + 严格防抖防重入锁，彻底杜绝 last call has not ended！
-function handleDirectSubscribe() {
-  if (isSubscribing.value) return;
-  isSubscribing.value = true;
-
-  // #ifdef MP-WEIXIN
-  const TEMPLATE_ID = 'Hi9R8Rt60xAEsrGEL9RcR-QDs_IeUntIuLSh1YaeUkU';
-
-  uni.requestSubscribeMessage({
-    tmplIds: [TEMPLATE_ID],
-    success: (res: any) => {
-      console.log('微信订阅消息授权结果:', res);
-      if (res[TEMPLATE_ID] === 'accept') {
-        uni.showToast({ title: '已成功开启微信通知！', icon: 'success' });
-      } else if (res[TEMPLATE_ID] === 'reject') {
-        uni.showToast({ title: '已拒绝接收通知', icon: 'none' });
-      } else {
-        uni.showToast({ title: '已完成授权设置', icon: 'none' });
-      }
-    },
-    fail: (err: any) => {
-      console.error('微信订阅消息报错:', err);
-      // 若微信返回 20004 或用户曾勾选总是拒绝，引导去设置页
-      if (err.errCode === 20004 || (err.errMsg && err.errMsg.includes('not ended'))) {
-        uni.showModal({
-          title: '微信通知设置',
-          content: '请在稍后弹出的设置页中，检查并开启「接收通知」！',
-          success: (mRes) => {
-            if (mRes.confirm) {
-              uni.openSetting();
-            }
-          }
-        });
-      } else {
-        uni.showModal({
-          title: '微信授权未弹窗提示',
-          content: `微信返回: ${err.errMsg || JSON.stringify(err)}\n\n排查提示:\n1. 检查当前开发者工具项目 AppID 是否为 wxd6d00a7513f90fe9；\n2. 手机真机需与该小程序有体验或开发者权限。`,
-          showCancel: false
-        });
-      }
-    },
-    complete: () => {
-      // 延迟 500ms 释放锁，彻底防止连击导致 last call 冲突
-      setTimeout(() => {
-        isSubscribing.value = false;
-      }, 500);
-    }
-  });
-  // #endif
-
-  // #ifndef MP-WEIXIN
-  isSubscribing.value = false;
-  uni.showToast({ title: '请在手机微信真机中测试', icon: 'none' });
-  // #endif
-}
-
 function handleToggleOnline(e: any) {
   const newStatus = e.detail.value;
-  const currentUserId = uni.getStorageSync('currentUserId') || 0;
 
   toggleOnlineStatusApi(newStatus).then(() => {
     stats.value.isOnline = newStatus;
@@ -262,9 +198,13 @@ function handleToggleOnline(e: any) {
       title: newStatus ? '接单开启成功' : '已暂停接单',
       icon: 'none'
     });
-    // 当开启接单时，主动引导订阅微信新订单提醒卡片 (提醒用户勾选“总是保持”)
+    // 【站内提示】开启接单后即时告知新订单通知方式 (微信订阅消息已下线, 改为平台线下通知)
     if (newStatus) {
-      guideSubscribeNewOrder();
+      uni.showModal({
+        title: '接单已开启',
+        content: '新订单到达时会通过三种方式通知您：\n1. 小程序内角标红点 + 震动提醒（需保持小程序在后台运行）；\n2. 订单列表「待接单」分类实时可见；\n3. 平台管理员收到通知后会电话联系您兜底。\n\n请保持手机畅通并及时接单哦~',
+        showCancel: false
+      });
     }
   }).catch(err => {
     uni.showToast({ title: err.message || '切换失败', icon: 'none' });

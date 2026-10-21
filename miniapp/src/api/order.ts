@@ -9,11 +9,40 @@ export interface CreateOrderParams {
   clientRemark?: string;
 }
 
+/**
+ * 【支付结果视图】
+ *
+ * mock 模式：isMockPaid = true，后端已自动完成支付，订单直接进入「待接单」
+ * 微信模式：返回 prepayId / timeStamp / nonceStr / package / signType / paySign，
+ *           前端用 uni.requestPayment 拉起微信支付面板
+ */
+export interface PaymentResult {
+  orderSn: string;
+  payType: string;
+  isMockPaid: boolean;
+  prepayId?: string;
+  timeStamp?: string;
+  nonceStr?: string;
+  packageVal?: string;
+  signType?: string;
+  paySign?: string;
+}
+
 export function createOrderApi(data: CreateOrderParams) {
-  return request<{ orderSn: string }>({
+  return request<PaymentResult>({
     url: '/order/create',
     method: 'POST',
     data
+  });
+}
+
+/**
+ * 【发起支付】对「待付款(0)」订单重新拉起支付（用于订单详情页的「去支付」按钮）
+ */
+export function payOrderApi(orderSn: string) {
+  return request<PaymentResult>({
+    url: `/order/pay/${orderSn}`,
+    method: 'POST'
   });
 }
 

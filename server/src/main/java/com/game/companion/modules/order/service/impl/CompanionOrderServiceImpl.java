@@ -83,6 +83,14 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
     /**
      * 微信支付通道费率 (0.6%)，落盘于 pay_flow.channel_fee 与 order_settlement.channel_fee。
+     *
+     * <p><b>重要说明</b>：微信支付官方并未提供「查询单笔交易实际通道费」的接口，
+     * 0.6% 是商户与微信签约的生活服务类目费率，由微信在<b>结算时从商户号可结算资金中实时截留</b>，
+     * 不会随支付回调一起返回。因此这里的数值是<b>按合同费率计算的预估值</b>，
+     * 最终必须以微信「交易账单 / 对账文件」为准做月度对账。</p>
+     *
+     * <p>该值支持热配置（{@code platform.channel-fee-rate}），商户拿到实际费率合同后
+     * 可在管理员热配置中心直接调整，无需重启服务。</p>
      */
     @Value("${platform.channel-fee-rate:0.006}")
     private Double channelFeeRate;
@@ -174,6 +182,39 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public PaymentResultVO payOrder(Long clientUserId, String orderSn) {
+        CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
+        if (order == null) {
+            throw new ApiException("订单不存在: " + orderSn);
+        }
+        if (clientUserId == null || !clientUserId.equals(order.getClientUserId())) {
+            throw new ApiException("操作被拒绝：只能支付自己的订单");
+        }
+        if (order.getOrderStatus() != null && order.getOrderStatus() != OrderStatusEnum.PENDING_PAY.getCode()) {
+            throw new ApiException("该订单无需支付（当前状态：" + order.getOrderStatus() + "）");
+        }
+
+        PaymentService paymentService = paymentStrategyContext.getService();
+        SysUser client = sysUserMapper.selectById(clientUserId);
+        String clientOpenid = (client != null && client.getOpenid() != null && !client.getOpenid().isEmpty())
+                ? client.getOpenid() : "mock_openid";
+
+        CreatePaymentParam param = CreatePaymentParam.builder()
+                .orderSn(orderSn)
+                .amount(order.getTotalAmount())
+                .description("游戏开黑服务 - " + order.getGameName())
+                .clientOpenid(clientOpenid)
+                .build();
+
+        PaymentResultVO result = paymentService.createPayment(param);
+        if (Boolean.TRUE.equals(result.getIsMockPaid())) {
+            mockPaySuccess(orderSn);
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void recordPaySuccess(String orderSn, String payType, String transactionId, Integer payAmount) {
         CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
         if (order == null) {
@@ -193,7 +234,7 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         updateById(order);
 
         // 【金融级支付事实落盘】向 pay_flow 记录真实发生的支付事实与通道扣费，彻底与订单表解耦
-        int channelFee = (int) Math.round(actualAmount * channelFeeRate);
+        int channelFee = (int) Math.round(actualAmount * currentChannelFeeRate());
         PayFlow payFlow = new PayFlow();
         payFlow.setPaySn("PAY_" + DateUtil.format(new Date(), "yyyyMMddHHmmss") + RandomUtil.randomNumbers(6));
         payFlow.setOrderSn(orderSn);
@@ -208,10 +249,12 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         payFlow.setUpdateTime(LocalDateTime.now());
         payFlowMapper.insert(payFlow);
 
-        // 触发微信强提醒通知陪玩师
+        // 触发平台线下通知 (订阅消息已下线, 改由管理员人工线下通知陪练师)
         if (order.getCompanionUserId() != null) {
-            log.info("【下单成功触发通知】开始向陪玩师[{}]下发微信新订单强提醒卡片: orderSn={}", order.getCompanionUserId(), orderSn);
-            noticeService.sendNewOrderNotice(order.getCompanionUserId(), orderSn, order.getGameName(), order.getTotalAmount(), order.getClientRemark());
+            log.info("【下单成功生成通知事件】陪玩师[{}]收到新订单, 等待平台线下通知: orderSn={}",
+                    order.getCompanionUserId(), orderSn);
+            noticeService.createNewOrderNotice(order.getCompanionUserId(), orderSn, order.getGameName(),
+                    order.getTotalAmount(), order.getClientRemark());
         } else {
             log.info("【公共大厅单】该订单无指定陪玩师，流转至派单大厅");
         }
@@ -258,6 +301,9 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         order.setOrderStatus(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode());
         order.setAcceptTime(LocalDateTime.now());
         updateById(order);
+
+        // 陪玩师收到订单后，同步生成一条平台通知事件，便于管理员掌握履约动态
+        noticeService.createOrderAcceptedNotice(companionUserId, orderSn, order.getGameName(), order.getTotalAmount());
 
         log.info("【陪玩师已接单】订单号={}, 陪玩师ID={}, 激活双方IM沟通房间", orderSn, companionUserId);
     }
@@ -323,7 +369,7 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         double rate = currentCommissionRate();
         int grossFee = (int) Math.round(totalAmt * rate);
         int income = totalAmt - grossFee;
-        int channelFee = (int) Math.round(totalAmt * channelFeeRate);
+        int channelFee = (int) Math.round(totalAmt * currentChannelFeeRate());
         int netProfit = grossFee - channelFee;
 
         // 幂等保护：同一订单只允许生成一张清算单
@@ -403,6 +449,27 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
         log.info("【订单完结并清算入账】{} 划扣收益 {}分 入陪玩师[{}]钱包, 平台净利: {}分 (毛抽佣{}分 - 微信通道费{}分)",
                 operatorDesc, income, companionId, netProfit, grossFee, channelFee);
+    }
+
+    /**
+     * 【热配置】获取当前生效的微信通道费率。
+     *
+     * <p>优先读取管理员热配置中心的 {@code platform.channel-fee-rate}（支持百分数，如 0.6 表示 0.6%），
+     * 缺失时回退到启动配置。</p>
+     */
+    private double currentChannelFeeRate() {
+        try {
+            String rateStr = platformConfigService.getConfig("platform.channel-fee-rate", null);
+            if (rateStr != null && !rateStr.trim().isEmpty()) {
+                double rate = Double.parseDouble(rateStr.trim());
+                if (rate >= 0 && rate <= 10) {
+                    return rate / 100.0;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取通道费率热配置失败, 回退默认值: {}", e.getMessage());
+        }
+        return (channelFeeRate == null) ? 0.006 : channelFeeRate;
     }
 
     /**
@@ -629,6 +696,9 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         sysMsg.setContent("⚠️ 客户已发起售后维权争议申请，平台管理员已介入核实，当前订单暂停自动结算！");
         sysMsg.setCreateTime(LocalDateTime.now());
         chatMessageMapper.insert(sysMsg);
+
+        // 生成平台待通知事件, 提示管理员尽快线下介入
+        noticeService.createDisputeNotice(order.getClientUserId(), orderSn, order.getDisputeReason());
 
         log.info("【客户发起维权争议】订单号={}, 客户ID={}, 争议原因={}", orderSn, clientUserId, order.getDisputeReason());
     }

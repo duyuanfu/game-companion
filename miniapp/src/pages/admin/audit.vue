@@ -41,11 +41,51 @@
       >
         <text class="tab-title">💰 打款待审({{ withdrawList.length }})</text>
       </view>
-      <view 
+      <view
+        :class="['audit-tab-item', currentTab === 'notice' ? 'active' : '']"
+        @click="switchAuditTab('notice')"
+      >
+        <text class="tab-title">📢 待通知({{ noticeList.length }})</text>
+      </view>
+      <view
         :class="['audit-tab-item', currentTab === 'config' ? 'active' : '']"
         @click="switchAuditTab('config')"
       >
         <text class="tab-title">⚙️ 支付与配置</text>
+      </view>
+    </view>
+
+    <!-- ================= 模块：平台线下通知队列 (替代已下线的微信订阅消息) ================= -->
+    <view v-if="currentTab === 'notice'" class="audit-section">
+      <view class="notice-guide">
+        <text class="guide-title">📢 陪练师无法及时收到微信消息，需平台人工线下通知</text>
+        <text class="guide-desc">微信小程序订阅消息为一次性机制已下线。以下事件请通过电话 / 微信 / 短信联系当事人，通知完成后点击「已通知」。</text>
+      </view>
+
+      <view v-if="noticeList.length === 0" class="empty-box">
+        <text class="empty-text">当前没有待通知事件</text>
+      </view>
+
+      <view v-for="item in noticeList" :key="item.id" class="audit-card notice-card">
+        <view class="notice-header">
+          <text class="notice-type">{{ item.typeText }}</text>
+          <text class="notice-time">{{ item.createTime }}</text>
+        </view>
+        <text class="notice-title">{{ item.title }}</text>
+        <text class="notice-content">{{ item.content }}</text>
+        <view class="notice-contact">
+          <text class="notice-lbl">联系人：</text>
+          <text class="notice-name">{{ item.userName }}</text>
+          <text class="notice-lbl">　电话：</text>
+          <text class="notice-phone">{{ item.phone || '未绑定' }}</text>
+        </view>
+        <view class="notice-order" v-if="item.orderSn">
+          <text class="notice-lbl">订单号：</text>
+          <text class="notice-sn">{{ item.orderSn }}</text>
+        </view>
+        <button class="notice-ack-btn" @click="handleAckNotice(item)">
+          ✅ 已完成线下通知
+        </button>
       </view>
     </view>
 
@@ -201,6 +241,18 @@
           />
         </view>
 
+        <!-- 微信支付通道费率 -->
+        <view class="config-item">
+          <text class="c-lbl">微信通道费率 (%)</text>
+          <input
+            class="c-input"
+            type="digit"
+            v-model="configForm.channelFeePercent"
+            placeholder="如: 0.6 代表 0.6%"
+          />
+          <text class="c-tip">微信不提供单笔实收通道费查询接口，此为合同费率预估值，最终以微信交易账单对账为准</text>
+        </view>
+
         <!-- 小程序 AppID -->
         <view class="config-item">
           <text class="c-lbl">小程序 AppID</text>
@@ -272,12 +324,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { onPullDownRefresh } from '@dcloudio/uni-app';
-import { getPendingAuditsApi, auditDecisionApi, getDashboardSummaryApi, getPlatformConfigApi, savePlatformConfigApi, type PlatformConfig } from '../../api/admin';
+import { getPendingAuditsApi, auditDecisionApi, getDashboardSummaryApi, getPlatformConfigApi, savePlatformConfigApi, getPendingNoticesApi, ackNoticeApi, type PlatformConfig, type NoticeItem } from '../../api/admin';
 import { getAdminWithdrawListApi, auditWithdrawApi, type WithdrawItem } from '../../api/wallet';
 
 const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80';
 
-const currentTab = ref<'companion' | 'withdraw' | 'config'>('companion');
+const currentTab = ref<'companion' | 'withdraw' | 'notice' | 'config'>('companion');
 
 const dashboard = ref<any>({
   todayOrderCount: 0,
@@ -288,6 +340,7 @@ const dashboard = ref<any>({
 });
 const auditList = ref<any[]>([]);
 const withdrawList = ref<WithdrawItem[]>([]);
+const noticeList = ref<NoticeItem[]>([]);
 const loading = ref(false);
 const isPlaying = ref(false);
 let audioContext: UniApp.InnerAudioContext | null = null;
@@ -296,6 +349,7 @@ let audioContext: UniApp.InnerAudioContext | null = null;
 const configForm = ref<PlatformConfig>({
   paymentMode: 'mock',
   commissionPercent: 10,
+  channelFeePercent: 0.6,
   appId: '',
   appSecret: '',
   mchId: '',
@@ -327,6 +381,14 @@ function loadData() {
     }).finally(() => {
       loading.value = false;
     });
+  } else if (currentTab.value === 'notice') {
+    getPendingNoticesApi().then(res => {
+      noticeList.value = res.data || [];
+    }).catch(() => {
+      noticeList.value = [];
+    }).finally(() => {
+      loading.value = false;
+    });
   } else if (currentTab.value === 'config') {
     getPlatformConfigApi().then(res => {
       if (res.data) {
@@ -338,9 +400,28 @@ function loadData() {
   }
 }
 
-function switchAuditTab(tab: 'companion' | 'withdraw' | 'config') {
+function switchAuditTab(tab: 'companion' | 'withdraw' | 'notice' | 'config') {
   currentTab.value = tab;
   loadData();
+}
+
+/**
+ * 标记某条事件已完成线下通知
+ */
+function handleAckNotice(item: NoticeItem) {
+  uni.showModal({
+    title: '确认已通知？',
+    content: `即将标记「${item.title}」为已通知。\n\n请确认已通过电话 / 微信 / 短信联系到【${item.userName}】${item.phone ? ' (' + item.phone + ')' : ''}。`,
+    success: (res) => {
+      if (!res.confirm) return;
+      ackNoticeApi(item.id, '已通过电话/微信完成通知').then(() => {
+        uni.showToast({ title: '已标记为通知完成！', icon: 'success' });
+        loadData();
+      }).catch(err => {
+        uni.showToast({ title: err?.message || '操作失败', icon: 'none' });
+      });
+    }
+  });
 }
 
 function handleSaveConfig() {
@@ -556,6 +637,85 @@ onPullDownRefresh(() => {
   margin-bottom: 24rpx;
   box-shadow: 0 4rpx 12rpx rgba(0,0,0,0.04);
 }
+.notice-guide {
+  background: #fff7ed;
+  border: 2rpx solid #fed7aa;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 24rpx;
+}
+.guide-title {
+  display: block;
+  font-size: 28rpx;
+  font-weight: bold;
+  color: #c2410c;
+  margin-bottom: 10rpx;
+}
+.guide-desc {
+  font-size: 24rpx;
+  color: #9a3412;
+  line-height: 1.6;
+}
+.notice-card {
+  border-left: 8rpx solid #f97316;
+}
+.notice-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+.notice-type {
+  font-size: 22rpx;
+  color: #ffffff;
+  background: #f97316;
+  padding: 4rpx 14rpx;
+  border-radius: 8rpx;
+}
+.notice-time {
+  font-size: 22rpx;
+  color: #9ca3af;
+}
+.notice-title {
+  display: block;
+  font-size: 30rpx;
+  font-weight: bold;
+  color: #111827;
+  margin-bottom: 10rpx;
+}
+.notice-content {
+  display: block;
+  font-size: 25rpx;
+  color: #4b5563;
+  line-height: 1.6;
+  margin-bottom: 12rpx;
+}
+.notice-contact, .notice-order {
+  font-size: 24rpx;
+  margin-bottom: 6rpx;
+}
+.notice-lbl {
+  color: #9ca3af;
+}
+.notice-name {
+  color: #111827;
+  font-weight: bold;
+}
+.notice-phone {
+  color: #dc2626;
+  font-weight: bold;
+}
+.notice-sn {
+  color: #4f46e5;
+}
+.notice-ack-btn {
+  background: #10b981;
+  color: #ffffff;
+  font-size: 26rpx;
+  border-radius: 30rpx;
+  line-height: 2.2;
+  margin-top: 16rpx;
+}
 .applicant-row {
   display: flex;
   align-items: center;
@@ -759,6 +919,13 @@ onPullDownRefresh(() => {
   background: #6366f1;
   color: #ffffff;
   font-weight: bold;
+}
+.c-tip {
+  display: block;
+  font-size: 21rpx;
+  color: #9ca3af;
+  margin-top: 8rpx;
+  line-height: 1.5;
 }
 .c-input {
   background: #f8fafc;

@@ -148,13 +148,22 @@
 
     <!-- 【场景 A：我是下单客户 (老板端)】 -->
     <view v-if="isClient" class="role-action-wrapper">
+      <!-- 客户态-待付款状态，可继续支付 -->
+      <view v-if="order.orderStatus === 0" class="section-card tip-panel">
+        <text class="tip-title">💳 订单待支付</text>
+        <text class="tip-desc">该订单尚未完成支付，支付成功后才会流转为「已付款待接单」并通知陪玩师。</text>
+        <button class="pay-order-btn" @click="handlePayOrder">
+          立即支付 ¥{{ ((order.totalAmount || 0) / 100).toFixed(2) }}
+        </button>
+      </view>
+
       <!-- 客户态-待接单状态 -->
       <view v-if="order.orderStatus === 1" class="section-card tip-panel">
         <view class="countdown-row">
           <text class="tip-title">⏳ 正在等待陪玩师接单</text>
           <text class="countdown-badge">{{ countdownText }}</text>
         </view>
-        <text class="tip-desc">系统已通过微信与短信强提醒对方，10分钟未接单系统将自动为您全额原路退款！您也可随时主动撤回。</text>
+        <text class="tip-desc">系统已通过站内提醒与平台人工通知告知对方，10分钟未接单系统将自动为您全额原路退款！您也可随时主动撤回。</text>
         <button class="cancel-order-btn" @click="handleCancelOrder">
           撤回订单 (全额退款)
         </button>
@@ -262,9 +271,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { onLoad, onShow, onHide, onUnload, onPullDownRefresh } from '@dcloudio/uni-app';
-import { getOrderDetailApi, applyFinishOrderApi, confirmOrderApi, acceptOrderApi, cancelOrderApi, autoRefundTimeoutApi, submitReviewApi, getReviewDetailApi, applyDisputeApi } from '../../api/order';
+import { getOrderDetailApi, applyFinishOrderApi, confirmOrderApi, acceptOrderApi, cancelOrderApi, autoRefundTimeoutApi, submitReviewApi, getReviewDetailApi, applyDisputeApi, payOrderApi } from '../../api/order';
 import { getUserInfoApi } from '../../api/user';
-import { silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 const order = ref<any>({
   orderSn: '',
@@ -542,9 +550,63 @@ function enterChat() {
   });
 }
 
+/**
+ * 【继续支付】对待付款(0)订单重新发起支付
+ */
+function handlePayOrder() {
+  uni.showLoading({ title: '正在拉起支付...' });
+  payOrderApi(order.value.orderSn).then((res) => {
+    uni.hideLoading();
+    const payResult: any = res.data || {};
+    if (payResult.isMockPaid) {
+      uni.showToast({ title: '支付成功！', icon: 'success' });
+      loadOrderDetail(order.value.orderSn);
+      return;
+    }
+    if (!payResult.prepayId) {
+      uni.showToast({ title: '支付发起失败，请重试', icon: 'none' });
+      return;
+    }
+    doWechatPay(payResult);
+  }).catch(err => {
+    uni.hideLoading();
+    uni.showToast({ title: err?.message || '支付发起失败', icon: 'none' });
+  });
+}
+
+/**
+ * 拉起微信支付面板
+ */
+function doWechatPay(payResult: any) {
+  // #ifdef MP-WEIXIN
+  uni.requestPayment({
+    provider: 'wxpay',
+    timeStamp: payResult.timeStamp,
+    nonceStr: payResult.nonceStr,
+    package: payResult.packageVal,
+    signType: payResult.signType,
+    paySign: payResult.paySign,
+    success: () => {
+      uni.showToast({ title: '支付成功！', icon: 'success' });
+      setTimeout(() => loadOrderDetail(order.value.orderSn), 800);
+    },
+    fail: (err: any) => {
+      uni.showToast({ title: '支付未完成，可稍后重试', icon: 'none' });
+      console.warn('支付失败:', err);
+    }
+  });
+  // #endif
+
+  // #ifndef MP-WEIXIN
+  uni.showModal({
+    title: '开发调试模式',
+    content: '当前为 mock 支付模式，点击「确认支付」即视为支付成功。请在手机微信真机中预览以体验真实微信支付。',
+    success: () => { loadOrderDetail(order.value.orderSn); }
+  });
+  // #endif
+}
+
 function handleAcceptOrder() {
-  // 静默为陪练师补充通知配额 (详情页接单手势触发)
-  silentAccumulateSubscribeQuota();
   acceptOrderApi(order.value.orderSn).then(() => {
     uni.showToast({ title: '接单成功！进入服务中', icon: 'success' });
     loadOrderDetail(order.value.orderSn);
@@ -572,8 +634,6 @@ function handleCancelOrder() {
 }
 
 function handleUploadScreenshot() {
-  // 静默为陪练师补充通知配额 (上传凭证手势触发)
-  silentAccumulateSubscribeQuota();
   uni.chooseImage({
     count: 1,
     success: (chooseRes) => {
@@ -774,6 +834,15 @@ function previewImage(url: string) {
   font-size: 24rpx;
   border-radius: 24rpx;
   line-height: 2;
+  margin-top: 16rpx;
+}
+.pay-order-btn {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: bold;
+  border-radius: 30rpx;
+  line-height: 2.2;
   margin-top: 16rpx;
 }
 .finish-btn {

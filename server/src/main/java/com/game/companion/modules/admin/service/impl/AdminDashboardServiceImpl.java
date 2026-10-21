@@ -108,8 +108,8 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
             }
         }
 
-        // 触发微信通知
-        noticeService.sendAuditResultNotice(profile.getUserId(), dto.getIsApproved(), dto.getRejectReason());
+        // 触发通知事件 (平台线下通知)
+        noticeService.createAuditResultNotice(profile.getUserId(), dto.getIsApproved(), dto.getRejectReason());
     }
 
     @Override

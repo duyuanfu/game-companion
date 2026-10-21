@@ -57,9 +57,9 @@ public class DatabaseCleanTest {
     private com.game.companion.modules.notice.service.NoticeService noticeService;
 
     @Test
-    public void testSendRealNoticeToUser2() {
-        System.out.println("========== [直接向真实陪玩师 id=2 微信推送订单订阅消息] ==========");
-        noticeService.sendNewOrderNotice(2L, "ORDER_TEST_20261019", "王者荣耀 (实机对测)", 2500, "测试真实微信卡片直推");
+    public void testCreateOfflineNoticeForUser2() {
+        System.out.println("========== [为真实陪玩师 id=2 生成一条待线下通知事件] ==========");
+        noticeService.createNewOrderNotice(2L, "ORDER_TEST_20261019", "王者荣耀 (实机对测)", 2500, "测试平台线下通知事件");
     }
 
     @Test

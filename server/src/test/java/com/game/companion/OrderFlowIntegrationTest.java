@@ -195,6 +195,28 @@ public class OrderFlowIntegrationTest {
 
             // 自动为 user_wallet 补充 version 乐观锁并发安全字段
             try { stmt.execute("ALTER TABLE `user_wallet` ADD COLUMN `version` INT NOT NULL DEFAULT 0;"); } catch (Exception ignored) {}
+
+            // 自动重建/升级 notice_log 为「平台线下通知事件队列」结构
+            try { stmt.execute("DROP TABLE IF EXISTS `notice_log`;"); } catch (Exception ignored) {}
+            stmt.execute("CREATE TABLE IF NOT EXISTS `notice_log` (" +
+                    "`id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY," +
+                    "`order_sn` VARCHAR(32) NOT NULL DEFAULT ''," +
+                    "`target_user_id` BIGINT NOT NULL DEFAULT 0," +
+                    "`notice_type` TINYINT NOT NULL DEFAULT 1," +
+                    "`channel` TINYINT NOT NULL DEFAULT 5," +
+                    "`title` VARCHAR(128) DEFAULT NULL," +
+                    "`content` TEXT DEFAULT NULL," +
+                    "`user_name` VARCHAR(64) DEFAULT NULL," +
+                    "`phone` VARCHAR(20) DEFAULT NULL," +
+                    "`amount` INT DEFAULT NULL," +
+                    "`send_status` TINYINT NOT NULL DEFAULT 0," +
+                    "`response_msg` VARCHAR(255) DEFAULT NULL," +
+                    "`create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                    "`finish_time` DATETIME DEFAULT NULL," +
+                    "KEY `idx_order_sn` (`order_sn`)," +
+                    "KEY `idx_target_user` (`target_user_id`)," +
+                    "KEY `idx_send_status` (`send_status`)" +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
         } catch (Exception e) {
             System.err.println("初始化表异常: " + e.getMessage());
         }

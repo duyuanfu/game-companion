@@ -10,18 +10,27 @@
         <text class="lbl">服务陪玩：</text>
         <text class="val highlight-name">{{ nickname }}</text>
       </view>
+      <view class="brief-row" v-if="selectedGameIcon">
+        <text class="lbl">开黑游戏：</text>
+        <view class="brief-game">
+          <image class="brief-game-icon" :src="selectedGameIcon" mode="aspectFit" />
+          <text class="val">{{ selectedGameName }}</text>
+        </view>
+      </view>
     </view>
 
     <!-- 🎮 核心功能：选择游戏服务技能 (支持一陪多游戏动态定价) -->
     <view class="form-card skill-card">
       <view class="card-section-title">选择开黑服务项目</view>
       <view class="skills-grid">
-        <view 
-          v-for="skill in skillList" 
-          :key="skill.id" 
+        <view
+          v-for="skill in skillList"
+          :key="skill.id"
           :class="['skill-item', selectedSkillId === skill.id ? 'active' : '']"
           @click="selectSkill(skill)"
         >
+          <image v-if="skill.gameIcon" class="skill-game-icon" :src="skill.gameIcon" mode="aspectFit" />
+          <view v-else class="skill-game-icon fallback">🎮</view>
           <view class="skill-game-name">{{ skill.gameName }}</view>
           <view class="skill-rank">{{ skill.rankName }}</view>
           <view class="skill-price">
@@ -86,6 +95,7 @@ const nickname = ref('认证陪练师');
 const selectedSkillId = ref<number>(1);
 const selectedSkillPrice = ref<number>(25);
 const selectedGameName = ref<string>('王者荣耀');
+const selectedGameIcon = ref<string>('');
 const currentUnit = ref<string>('小时');
 const skillList = ref<CompanionSkillItem[]>([]);
 
@@ -116,6 +126,7 @@ function selectSkill(skill: CompanionSkillItem) {
   selectedSkillId.value = skill.id;
   selectedSkillPrice.value = skill.price / 100;
   selectedGameName.value = skill.gameName;
+  selectedGameIcon.value = skill.gameIcon || '';
   currentUnit.value = skill.unit || '小时';
 }
 
@@ -129,6 +140,16 @@ onLoad((options: any) => {
   loadSkills(companionUserId.value);
 });
 
+/**
+ * 【支付时机说明】
+ *
+ * 客户在「确认预约」这一步完成支付（下单即支付），支付成功后订单才进入「已付款待接单(1)」，
+ * 陪练师才会收到订单。
+ *
+ * - mock 模式：后端自动模拟支付成功，前端直接跳转订单详情
+ * - 微信真实支付：前端拉起微信支付面板，用户确认付款后由微信异步回调通知后端，
+ *   订单随即流转为「已付款待接单」
+ */
 function handleSubmitOrder() {
   const currentUserId = uni.getStorageSync('currentUserId') || 0;
   if (currentUserId === companionUserId.value) {
@@ -149,21 +170,85 @@ function handleSubmitOrder() {
     gameAccount: gameAccount.value,
     clientRemark: clientRemark.value
   }).then(res => {
-    uni.showToast({ title: '预约支付成功！', icon: 'success' });
     const orderSn = (res.data && res.data.orderSn) ? res.data.orderSn : '';
     if (orderSn) {
       uni.setStorageSync('lastOrderSn', orderSn);
     }
-    setTimeout(() => {
-      uni.redirectTo({
-        url: `/pages/order/detail?orderSn=${orderSn}`
-      });
-    }, 600);
+
+    const payResult: any = res.data || {};
+    // Mock 模式：后端已自动完成支付，直接进入订单详情
+    if (payResult.isMockPaid) {
+      uni.showToast({ title: '预约支付成功！', icon: 'success' });
+      setTimeout(() => {
+        uni.redirectTo({ url: `/pages/order/detail?orderSn=${orderSn}` });
+      }, 600);
+      return;
+    }
+
+    // 微信真实支付：拉起微信支付面板
+    if (!payResult.prepayId) {
+      uni.showToast({ title: '支付发起失败，请重试', icon: 'none' });
+      return;
+    }
+    requestWechatPay(payResult, orderSn);
   }).catch(err => {
     uni.showToast({ title: err.message || '下单失败', icon: 'none' });
   }).finally(() => {
     paying.value = false;
   });
+}
+
+/**
+ * 拉起微信支付面板
+ */
+function requestWechatPay(payResult: any, orderSn: string) {
+  // #ifdef MP-WEIXIN
+  uni.requestPayment({
+    provider: 'wxpay',
+    timeStamp: payResult.timeStamp,
+    nonceStr: payResult.nonceStr,
+    package: payResult.packageVal,
+    signType: payResult.signType,
+    paySign: payResult.paySign,
+    success: () => {
+      uni.showToast({ title: '支付成功！', icon: 'success' });
+      // 订单状态由微信异步回调 (/api/pay/notify) 推进，此处直接进入详情页查看
+      setTimeout(() => {
+        uni.redirectTo({ url: `/pages/order/detail?orderSn=${orderSn}` });
+      }, 800);
+    },
+    fail: (err: any) => {
+      const msg = (err && err.errMsg) ? err.errMsg : '';
+      if (msg.includes('cancel')) {
+        uni.showModal({
+          title: '支付未完成',
+          content: '您已取消支付，订单仍处于「待付款」状态。可在「我的订单 → 待付款」中继续支付。',
+          showCancel: false
+        });
+      } else {
+        uni.showModal({
+          title: '支付失败',
+          content: `支付未完成：${msg || '未知错误'}\n订单仍处于「待付款」状态，可在「我的订单 → 待付款」中重试。`,
+          showCancel: false
+        });
+      }
+      setTimeout(() => {
+        uni.redirectTo({ url: `/pages/order/detail?orderSn=${orderSn}` });
+      }, 1200);
+    }
+  });
+  // #endif
+
+  // #ifndef MP-WEIXIN
+  uni.showModal({
+    title: '支付方式',
+    content: '当前为开发调试模式（mock 支付），点击「立即预约支付」即视为支付成功。请在手机微信真机中预览以体验真实微信支付。',
+    showCancel: false
+  });
+  setTimeout(() => {
+    uni.redirectTo({ url: `/pages/order/detail?orderSn=${orderSn}` });
+  }, 1500);
+  // #endif
 }
 </script>
 
@@ -229,6 +314,29 @@ function handleSubmitOrder() {
   border-radius: 16rpx;
   padding: 20rpx 16rpx;
   text-align: center;
+}
+.skill-game-icon {
+  width: 72rpx;
+  height: 72rpx;
+  margin: 0 auto 10rpx;
+  border-radius: 12rpx;
+  display: block;
+}
+.skill-game-icon.fallback {
+  font-size: 48rpx;
+  line-height: 72rpx;
+  text-align: center;
+  color: #9ca3af;
+}
+.brief-game {
+  display: flex;
+  align-items: center;
+}
+.brief-game-icon {
+  width: 40rpx;
+  height: 40rpx;
+  margin-right: 10rpx;
+  border-radius: 8rpx;
 }
 .skill-item.active {
   background: #eef2ff;

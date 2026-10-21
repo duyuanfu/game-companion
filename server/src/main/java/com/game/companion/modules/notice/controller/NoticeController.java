@@ -13,16 +13,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/notice")
 @RequiredArgsConstructor
-@Tag(name = "消息通知诊断接口", description = "用于独立测试向陪练师微信直接发送订阅消息卡片")
+@Tag(name = "消息通知接口", description = "平台线下通知事件队列 (替代已下线的微信订阅消息机制)")
 public class NoticeController {
 
     private final NoticeService noticeService;
 
     @GetMapping("/test-send")
-    @Operation(summary = "【诊断神器】直接向指定陪练师微信推送测试卡片消息")
-    public CommonResult<String> testSendSubscribeMsg(@RequestParam(defaultValue = "20001") Long companionUserId) {
+    @Operation(summary = "【诊断】生成一条测试用待通知事件")
+    public CommonResult<String> testCreateNotice(@RequestParam(defaultValue = "20001") Long companionUserId) {
         String testOrderSn = "TEST_" + System.currentTimeMillis();
-        noticeService.sendNewOrderNotice(companionUserId, testOrderSn, "王者荣耀 (测试)", 2500, "测试真实微信卡片直推");
-        return CommonResult.success("推送指令已发出，请查看 IDEA 控制台微信官方返回的详细日志，并检查手机微信「服务通知」！");
+        noticeService.createNewOrderNotice(companionUserId, testOrderSn, "王者荣耀 (测试)", 2500, "测试平台线下通知事件");
+        return CommonResult.success("待通知事件已生成，请在管理员手机端工作台的「待线下通知」中查看！");
     }
 }

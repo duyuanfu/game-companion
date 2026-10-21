@@ -224,22 +224,30 @@ CREATE TABLE `withdraw_record` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='提现记录表';
 
 -- --------------------------------------------------------
--- 10. 接单提醒与消息推送日志表 (后期扩展模块：监控漏单与触达率)
+-- 10. 平台线下通知事件队列表 (替代已下线的微信一次性订阅消息)
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `notice_log`;
 CREATE TABLE `notice_log` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '日志ID',
-  `order_sn` VARCHAR(32) NOT NULL COMMENT '关联订单号',
-  `target_user_id` BIGINT NOT NULL COMMENT '接收通知的陪玩师ID',
-  `channel` TINYINT NOT NULL COMMENT '通知通道：1-微信小程序订阅消息 2-微信服务号模板消息 3-手机短信 4-企业微信',
-  `content` TEXT DEFAULT NULL COMMENT '下发消息内容/JSON入参',
-  `send_status` TINYINT NOT NULL DEFAULT 0 COMMENT '发送状态：0-失败 1-成功',
-  `response_msg` VARCHAR(255) DEFAULT NULL COMMENT '第三方网关返回结果/错误码',
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '推送时间',
+  `order_sn` VARCHAR(32) NOT NULL DEFAULT '' COMMENT '关联订单号 (无订单关联的事件为空串)',
+  `target_user_id` BIGINT NOT NULL DEFAULT 0 COMMENT '需要被通知的用户ID (陪玩师/入驻申请人)',
+  `notice_type` TINYINT NOT NULL DEFAULT 1 COMMENT '通知类型: 1-新订单待接单 2-陪玩师已接单 3-入驻审核结果 4-售后维权',
+  `channel` TINYINT NOT NULL DEFAULT 5 COMMENT '通知渠道: 5-平台线下通知 (电话/微信/短信)',
+  `title` VARCHAR(128) DEFAULT NULL COMMENT '事件标题',
+  `content` TEXT DEFAULT NULL COMMENT '事件内容/线下通知话术',
+  `user_name` VARCHAR(64) DEFAULT NULL COMMENT '被通知人昵称',
+  `phone` VARCHAR(20) DEFAULT NULL COMMENT '被通知人手机号 (供平台线下拨打)',
+  `amount` INT DEFAULT NULL COMMENT '关联金额 (分)',
+  `send_status` TINYINT NOT NULL DEFAULT 0 COMMENT '通知状态: 0-待通知 1-已通知',
+  `response_msg` VARCHAR(255) DEFAULT NULL COMMENT '管理员处理备注 (通知方式/时间)',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '事件发生时间',
+  `finish_time` DATETIME DEFAULT NULL COMMENT '通知完成时间',
   PRIMARY KEY (`id`),
   KEY `idx_order_sn` (`order_sn`),
-  KEY `idx_target_user` (`target_user_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='派单通知下发日志表';
+  KEY `idx_target_user` (`target_user_id`),
+  KEY `idx_send_status` (`send_status`),
+  KEY `idx_create_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台线下通知事件队列 (替代已下线的微信订阅消息)';
 
 -- --------------------------------------------------------
 -- 11. 开黑房间即时聊天记录表 (真实双向通信)

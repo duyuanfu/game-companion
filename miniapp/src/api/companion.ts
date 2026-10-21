@@ -38,9 +38,13 @@ export interface CompanionSkillItem {
   userId: number;
   gameId: number;
   gameName: string;
+  /** 游戏图标 URL (来自 game_category.icon) */
+  gameIcon?: string;
   rankName: string;
   rankImg: string;
   price: number;
+  /** 单价 (元) */
+  priceYuan?: number;
   unit: string;
   status: number;
 }

@@ -99,7 +99,6 @@ import { onLoad, onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { getMyOrdersApi, acceptOrderApi } from '../../api/order';
 import { getUserInfoApi } from '../../api/user';
 import { getMyCompanionStatusApi } from '../../api/companion';
-import { silentAccumulateSubscribeQuota } from '../../utils/subscribe';
 
 /**
  * 【订单状态与分类映射表】
@@ -273,8 +272,6 @@ function goToDetail(orderSn: string) {
 }
 
 function quickAccept(orderSn: string) {
-  // 静默为陪练师补充通知配额 (高频接单手势触发)
-  silentAccumulateSubscribeQuota();
   acceptOrderApi(orderSn).then(() => {
     uni.showToast({ title: '接单成功！进入服务中', icon: 'success' });
     fetchOrderList();

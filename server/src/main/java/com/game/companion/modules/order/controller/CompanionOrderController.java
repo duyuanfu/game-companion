@@ -63,6 +63,13 @@ public class CompanionOrderController {
         return CommonResult.success(page);
     }
 
+    @PostMapping("/pay/{orderSn}")
+    @Operation(summary = "【发起支付】对待付款订单拉起微信支付 (Mock 模式立即模拟支付成功)")
+    public CommonResult<com.game.companion.payment.dto.PaymentResultVO> payOrder(@PathVariable String orderSn) {
+        Long clientUserId = authGuard.currentUserId();
+        return CommonResult.success(companionOrderService.payOrder(clientUserId, orderSn));
+    }
+
     @PostMapping("/mock-pay/{orderSn}")
     @Operation(summary = "【开发调试专用】手动触发模拟支付成功回调")
     public CommonResult<String> mockPay(@PathVariable String orderSn) {

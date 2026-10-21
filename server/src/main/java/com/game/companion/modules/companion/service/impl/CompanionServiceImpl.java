@@ -9,8 +9,10 @@ import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
 import com.game.companion.modules.companion.mapper.CompanionSkillMapper;
 import com.game.companion.modules.companion.service.CompanionService;
 import com.game.companion.modules.companion.vo.CompanionItemVO;
+import com.game.companion.modules.companion.vo.CompanionSkillVO;
 import com.game.companion.modules.companion.vo.CompanionStatusVO;
 import com.game.companion.modules.companion.vo.CompanionWorkbenchVO;
+import com.game.companion.modules.game.entity.GameCategory;
 import com.game.companion.modules.order.entity.CompanionOrder;
 import com.game.companion.modules.order.mapper.CompanionOrderMapper;
 import com.game.companion.modules.user.entity.SysUser;
@@ -24,7 +26,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -117,6 +121,53 @@ public class CompanionServiceImpl implements CompanionService {
             result.add(vo);
         }
 
+        return result;
+    }
+
+    @Override
+    public List<CompanionSkillVO> getCompanionSkillViews(Long companionUserId) {
+        List<CompanionSkill> skills = getCompanionSkills(companionUserId);
+        List<CompanionSkillVO> result = new ArrayList<>();
+        if (skills == null || skills.isEmpty()) {
+            return result;
+        }
+
+        // 一次性把游戏品类字典捞出来, 避免 N+1 查询
+        List<GameCategory> categories = gameCategoryMapper.selectList(
+                new LambdaQueryWrapper<GameCategory>().eq(GameCategory::getIsActive, 1)
+        );
+        // 以 id 为主键索引 (外键更可靠), 名称作为兜底 (兼容历史数据 game_id 缺失的场景)
+        Map<Long, GameCategory> iconMapById = new HashMap<>();
+        Map<String, GameCategory> iconMapByName = new HashMap<>();
+        for (GameCategory c : categories) {
+            if (c.getId() != null) {
+                iconMapById.put(c.getId(), c);
+            }
+            if (c.getName() != null) {
+                iconMapByName.put(c.getName(), c);
+            }
+        }
+
+        for (CompanionSkill s : skills) {
+            GameCategory category = (s.getGameId() != null) ? iconMapById.get(s.getGameId()) : null;
+            if (category == null && s.getGameName() != null) {
+                category = iconMapByName.get(s.getGameName());
+            }
+            result.add(CompanionSkillVO.builder()
+                    .id(s.getId())
+                    .companionId(s.getCompanionId())
+                    .userId(s.getUserId())
+                    .gameId(s.getGameId())
+                    .gameName(s.getGameName())
+                    .gameIcon(category != null ? category.getIcon() : null)
+                    .rankName(s.getRankName())
+                    .rankImg(s.getRankImg())
+                    .price(s.getPrice())
+                    .priceYuan(s.getPrice() != null ? s.getPrice() / 100.0 : 0.0)
+                    .unit(s.getUnit())
+                    .status(s.getStatus())
+                    .build());
+        }
         return result;
     }
 

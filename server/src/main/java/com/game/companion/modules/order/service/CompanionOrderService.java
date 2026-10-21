@@ -19,6 +19,12 @@ public interface CompanionOrderService extends IService<CompanionOrder> {
     void mockPaySuccess(String orderSn);
 
     /**
+     * 【发起支付】对处于「待付款(0)」的订单发起支付，返回前端拉起微信支付所需参数。
+     * Mock 模式下会立即模拟支付成功并流转为「待接单(1)」。
+     */
+    PaymentResultVO payOrder(Long clientUserId, String orderSn);
+
+    /**
      * 【支付事实落盘】记录一笔真实支付（微信V3回调 / Mock 支付）并把订单流转为「待接单」。
      * 幂等：同一订单重复回调不会重复落 pay_flow，也不会重复触发派单通知。
      *

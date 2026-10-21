@@ -18,6 +18,11 @@ public interface CompanionService {
     List<CompanionItemVO> listCompanions(String gameName, Long currentUserId);
 
     /**
+     * 获取陪玩师支持的所有游戏服务项目与定价列表 (含游戏图标)
+     */
+    java.util.List<com.game.companion.modules.companion.vo.CompanionSkillVO> getCompanionSkillViews(Long companionUserId);
+
+    /**
      * 获取陪玩师支持的所有游戏服务项目与定价列表
      */
     List<CompanionSkill> getCompanionSkills(Long companionUserId);

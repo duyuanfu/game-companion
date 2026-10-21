@@ -9,6 +9,7 @@ import com.game.companion.modules.admin.service.AdminDashboardService;
 import com.game.companion.modules.admin.service.PlatformConfigService;
 import com.game.companion.modules.admin.vo.AdminDashboardVO;
 import com.game.companion.modules.admin.vo.CompanionAuditItemVO;
+import com.game.companion.modules.notice.service.NoticeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -23,6 +24,7 @@ public class AdminCompanionController {
 
     private final AdminDashboardService adminDashboardService;
     private final PlatformConfigService platformConfigService;
+    private final NoticeService noticeService;
     private final AuthGuard authGuard;
 
     @GetMapping("/config/get")
@@ -64,5 +66,22 @@ public class AdminCompanionController {
         authGuard.requireAdmin();
         AdminDashboardVO dashboard = adminDashboardService.getDashboardSummary();
         return CommonResult.success(dashboard);
+    }
+
+    @GetMapping("/notice/pending")
+    @Operation(summary = "【管理员手机端】待线下通知事件队列 (新订单/审核结果/维权)")
+    public CommonResult<java.util.List<com.game.companion.modules.notice.vo.NoticeItemVO>> getPendingNotices(
+            @RequestParam(defaultValue = "50") int limit) {
+        authGuard.requireAdmin();
+        return CommonResult.success(noticeService.getPendingNotices(limit));
+    }
+
+    @PostMapping("/notice/ack")
+    @Operation(summary = "【管理员手机端】标记某条事件已完成线下通知")
+    public CommonResult<String> ackNotice(@RequestParam Long noticeId,
+                                          @RequestParam(required = false) String remark) {
+        authGuard.requireAdmin();
+        noticeService.markNotified(noticeId, remark);
+        return CommonResult.success("已标记为通知完成！");
     }
 }

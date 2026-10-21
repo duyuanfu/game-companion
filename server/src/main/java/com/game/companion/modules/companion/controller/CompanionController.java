@@ -31,9 +31,9 @@ public class CompanionController {
     }
 
     @GetMapping("/skills")
-    @Operation(summary = "从数据库查询陪练师支持的所有游戏技能项目与对应单价")
-    public CommonResult<List<CompanionSkill>> getCompanionSkills(@RequestParam Long companionUserId) {
-        List<CompanionSkill> list = companionService.getCompanionSkills(companionUserId);
+    @Operation(summary = "从数据库查询陪练师支持的所有游戏技能项目与对应单价 (含游戏图标)")
+    public CommonResult<java.util.List<com.game.companion.modules.companion.vo.CompanionSkillVO>> getCompanionSkills(@RequestParam Long companionUserId) {
+        List<com.game.companion.modules.companion.vo.CompanionSkillVO> list = companionService.getCompanionSkillViews(companionUserId);
         return CommonResult.success(list);
     }
 
