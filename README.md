@@ -815,21 +815,24 @@ platform:
 
 ```text
 game-companion/
-├── docker-compose.yml          # MySQL + Redis + 后端 + Web
-├── .env.docker.example         # 环境变量模板
-├── docker/certs/               # 微信支付商户证书（不提交）
+├── docker-compose.yml            # MySQL + Redis + 后端 + Web
+├── docker-compose.https.yml      # HTTPS 覆盖配置（容器内终止 TLS）
+├── .env.docker.example           # 环境变量模板
+├── docker/ssl/                   # 域名 HTTPS 证书（不提交）
+├── docker/certs/                 # 微信支付商户证书（不提交）
 ├── server/Dockerfile
-└── web/Dockerfile
+├── web/Dockerfile
+└── web/nginx.ssl.conf            # HTTPS 站点配置
 ```
 
 架构：
 
 ```text
-公网 443（宿主机 Nginx/Caddy 终止 TLS，可选）
+公网 443
   │
   ▼
-web 容器 :80（Nginx：静态资源 + /api 反向代理）
-  │
+web 容器 :443（Nginx：TLS 终止 + 静态资源 + /api 反向代理）
+  │   :80 仅用于 301 跳转和容器健康检查
   ▼
 server 容器 :8088（Spring Boot）
   ├── mysql 容器 :3306
@@ -838,135 +841,179 @@ server 容器 :8088（Spring Boot）
 
 后端、MySQL、Redis 都只在 Compose 内部网络暴露，不对公网开放。
 
-#### 5.2 首次部署
+#### 5.2 准备证书与环境变量
 
 ```bash
 cd /opt/game-companion
 
-# 1. 准备环境变量
+# 1. 环境变量
 cp .env.docker.example .env
 chmod 600 .env
 vi .env
 
-# 2. 构建并启动
-docker compose up -d --build
-
-# 3. 查看状态
-docker compose ps
-
-# 4. 健康检查
-curl -s http://127.0.0.1/api/health
+# 2. HTTPS 域名证书（fullchain 必须包含中间证书）
+sudo mkdir -p docker/ssl
+sudo cp /path/to/fullchain.pem docker/ssl/fullchain.pem
+sudo cp /path/to/privkey.pem   docker/ssl/privkey.pem
+sudo chmod 600 docker/ssl/*.pem
 ```
 
-健康检查应返回：
+`.env` 至少需要修改：
+
+```bash
+MYSQL_ROOT_PASSWORD=强密码
+MYSQL_PASSWORD=强密码
+REDIS_PASSWORD=强密码
+
+WEB_BASE_URL=https://你的域名
+CORS_ALLOWED_ORIGINS=https://你的域名
+
+PLATFORM_PAYMENT_MODE=wechat
+WX_PAY_NOTIFY_URL=https://你的域名/api/pay/notify
+WX_PAY_WEB_APP_URL=https://你的域名
+```
+
+证书域名必须与上述三个域名完全一致，否则浏览器、微信支付回调都会出问题。
+
+#### 5.3 首次部署（HTTPS）
+
+```bash
+cd /opt/game-companion
+
+# 建议先校验 Compose 配置
+docker compose -f docker-compose.yml -f docker-compose.https.yml config > /dev/null
+
+# 构建并启动
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+
+# 查看状态
+docker compose -f docker-compose.yml -f docker-compose.https.yml ps
+
+# 健康检查
+curl -s https://你的域名/api/health
+```
+
+应返回：
 
 ```json
 {"code":200,"data":{"name":"PP电竞鼠 (PP Esports)"}}
 ```
 
-首次启动时，MySQL 数据卷为空，会自动执行 `server/src/main/resources/init_schema.sql` 建库建表并写入游戏品类与演示数据。
+为减少重复参数，建议在当前 shell 定义：
 
-> `init_schema.sql` 含 `DROP TABLE`，只会在数据卷为空时执行一次；后续重启不会重复执行。
+```bash
+DC="docker compose -f docker-compose.yml -f docker-compose.https.yml"
+$DC ps
+$DC logs -f server
+```
 
-#### 5.3 已有数据库升级
+下文命令默认使用 `$DC`；新开终端需要重新定义，否则 `docker compose up` 会以纯 HTTP 配置重建 Web 容器。
 
-不要再执行 `init_schema.sql`，改为执行增量迁移：
+首次启动时 MySQL 数据卷为空，会自动执行 `server/src/main/resources/init_schema.sql` 建库建表并写入游戏品类数据。
+
+> `init_schema.sql` 含 `DROP TABLE`，只会在数据卷为空时执行一次，后续重启不会重复执行。
+
+服务器安全组/防火墙需要放行 **80** 与 **443**。
+
+#### 5.4 纯 HTTP 部署（不推荐）
+
+没有证书或仅在局域网验证时：
+
+```bash
+docker compose up -d --build
+curl http://127.0.0.1/api/health
+```
+
+限制：
+
+- 微信 H5 支付必须使用 HTTPS，纯 HTTP 只能用于本地或内网联调
+- 80 端口被占用时修改 `.env` 的 `WEB_HTTP_PORT`
+- 后续要切 HTTPS，直接按 5.2、5.3 加证书并用覆盖配置重建即可
+
+如果 HTTPS 必须由**已有宿主机 Nginx** 终止（例如该 Nginx 还服务其它站点），则不要用 `docker-compose.https.yml`：
+
+```bash
+# .env: WEB_HTTP_PORT=8080（避免与宿主机 80 冲突）
+docker compose up -d --build
+```
+
+宿主机 Nginx 关键配置：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Port 443;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # SSE 必须关闭缓冲
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+```
+
+#### 5.5 已有数据库升级
+
+不要执行 `init_schema.sql`，改为执行增量迁移：
 
 ```bash
 # 先备份
-docker compose exec -T mysql sh -c \
+$DC exec -T mysql sh -c \
   'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction game_companion' \
   > backup_$(date +%F).sql
 
-# 执行迁移（脚本可重复执行，遇到重复数据会中止提示）
-docker compose exec -T mysql sh -c \
+# 执行迁移（脚本可重复执行，遇到重复数据会中止并提示）
+$DC exec -T mysql sh -c \
   'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game_companion' \
   < server/src/main/resources/db/migration_web_launch.sql
 ```
 
-#### 5.4 HTTPS
-
-微信 H5 支付、真实域名访问都需要 HTTPS。两种方式：
-
-**方式 A：宿主机 Nginx 终止 TLS（推荐）**
-
-将 `.env` 的 `WEB_PORT` 改为 `8080`（避免占用 80），再用宿主机 Nginx 转发：
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.example;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name your-domain.example;
-
-    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
-
-    client_max_body_size 25m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Port 443;
-
-        # SSE 必须关闭缓冲
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-}
-```
-
-**方式 B：直接用 80 端口**
-
-`WEB_PORT=80`，由云厂商负载均衡或 CDN 处理 HTTPS，再回源到服务器 80。
-
-无论哪种方式，`.env` 中的 `WEB_BASE_URL`、`CORS_ALLOWED_ORIGINS`、`WX_PAY_NOTIFY_URL` 都必须使用最终 HTTPS 域名。
-
-#### 5.5 微信支付证书
+#### 5.6 微信支付证书
 
 ```bash
 cp apiclient_key.pem apiclient_cert.pem docker/certs/
 
-# 容器内以 UID 10001 运行，必须让该用户可读，否则支付初始化会报 Permission denied
+# 后端容器以 UID 10001 运行，必须让该用户可读
 sudo chown 10001:10001 docker/certs/*.pem
 chmod 600 docker/certs/*.pem
 
-docker compose restart server
+$DC restart server
 ```
 
-`docker/certs` 挂载到容器内 `/opt/certs`，与 `.env` 默认路径一致。该目录下的证书已被 `.gitignore` 忽略。
+`docker/certs` 挂载到容器内 `/opt/certs`，与 `.env` 默认路径一致。证书已加入 `.gitignore`。
 
-#### 5.6 常用运维命令
+若日志出现 `Permission denied`，先检查宿主机证书属主是否为 `10001:10001`。
+
+#### 5.7 常用运维命令
 
 ```bash
-# 查看日志
-docker compose logs -f server
-docker compose logs -f web
+# 日志
+$DC logs -f server
+$DC logs -f web
 
-# 改代码后重建
+# 更新代码后重建
 git pull
-docker compose up -d --build
+$DC up -d --build
 
 # 只重启后端
-docker compose restart server
+$DC restart server
 
 # 停止（保留数据）
-docker compose down
+$DC down
 
-# 停止并删除所有数据卷（危险：会清空数据库、Redis 和上传文件）
-docker compose down -v
+# 停止并删除所有数据卷（危险：会清空数据库、Redis、上传文件）
+$DC down -v
 
 # 进入数据库
-docker compose exec mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game_companion'
+$DC exec mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game_companion'
+
+# 检查 Nginx 配置
+$DC exec web nginx -t
 ```
 
 数据卷：
@@ -977,16 +1024,39 @@ docker compose exec mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game
 | `game-companion_redis-data` | Redis AOF |
 | `game-companion_uploads` | 用户上传的头像、截图、音频 |
 
-`uploads` 是后端 `/app/uploads` 的持久化卷，删除后已上传文件将无法访问。
+`uploads` 对应后端 `/app/uploads`，删除后已上传文件将无法访问。
 
-#### 5.7 Docker 部署注意事项
+#### 5.8 证书续期
 
-- 生产环境务必修改 `.env` 中所有默认密码，`.env` 不要提交到 Git
-- `PLATFORM_PAYMENT_MODE=wechat` 时，未配置商户参数会导致支付报错，这是预期行为，不会假成功
-- `BOOTSTRAP_ADMIN_*` 只在第一次启动时创建管理员，创建成功后请删除并重启
-- 镜像构建需要访问 Docker Hub、Maven Central、npm Registry；国内服务器建议配置镜像加速
+续期后替换文件并重载 Nginx，无需重启后端：
+
+```bash
+sudo cp /path/to/new/fullchain.pem docker/ssl/fullchain.pem
+sudo cp /path/to/new/privkey.pem   docker/ssl/privkey.pem
+sudo chmod 600 docker/ssl/*.pem
+$DC exec web nginx -t && $DC exec web nginx -s reload
+```
+
+Let's Encrypt 证书可用 `certbot renew` 配合 deploy hook 自动复制并 reload：
+
+```bash
+# /etc/letsencrypt/renewal-hooks/deploy/game-companion.sh
+#!/usr/bin/env bash
+cp /etc/letsencrypt/live/你的域名/fullchain.pem /opt/game-companion/docker/ssl/fullchain.pem
+cp /etc/letsencrypt/live/你的域名/privkey.pem   /opt/game-companion/docker/ssl/privkey.pem
+chmod 600 /opt/game-companion/docker/ssl/*.pem
+docker exec gc-web nginx -s reload
+```
+
+#### 5.9 Docker 部署注意事项
+
+- 生产环境务必修改 `.env` 中所有默认密码，`.env` 不要提交
+- `PLATFORM_PAYMENT_MODE=wechat` 时未配置商户参数会导致支付报错，这是预期行为，不会假成功
+- `BOOTSTRAP_ADMIN_*` 只在首次启动时创建管理员，创建成功后请删除并重启
+- 镜像构建需要访问 Docker Hub、Maven Central、npm Registry，国内服务器建议配置镜像加速
 - 服务器建议 2 核 4G 以上，首次构建 JVM 与 Node 比较吃内存
-- MySQL 首次初始化需要几十秒，`docker compose up` 后请等待健康检查通过
+- MySQL 首次初始化需要几十秒，请等待健康检查通过再访问
+- 上传接口返回的 URL 依赖 `X-Forwarded-*`，本方案已在 Nginx 与后端配置好，换成其它代理时需保留这些请求头
 
 ### 6. 构建与本地验收
 

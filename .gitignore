@@ -59,3 +59,6 @@ Desktop.ini
 docker/certs/*.pem
 docker/certs/*.p12
 docker/certs/*.key
+
+# HTTPS 域名证书
+docker/ssl/*.pem
