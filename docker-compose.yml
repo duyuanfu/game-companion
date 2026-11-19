@@ -51,6 +51,8 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      args:
+        MAVEN_MIRROR_URL: ${MAVEN_MIRROR_URL:-}
     image: game-companion/server:latest
     container_name: gc-server
     restart: unless-stopped
@@ -107,6 +109,8 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
     image: game-companion/web:latest
     container_name: gc-web
     restart: unless-stopped

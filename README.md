@@ -1058,6 +1058,99 @@ docker exec gc-web nginx -s reload
 - MySQL 首次初始化需要几十秒，请等待健康检查通过再访问
 - 上传接口返回的 URL 依赖 `X-Forwarded-*`，本方案已在 Nginx 与后端配置好，换成其它代理时需保留这些请求头
 
+#### 5.10 镜像拉取超时与构建加速
+
+如果 `docker compose up` 报：
+
+```text
+failed to resolve reference "docker.io/library/redis:7-alpine": dial tcp ...: i/o timeout
+```
+
+说明服务器无法直连 Docker Hub，需要配置镜像加速或代理。
+
+**方案 1：Docker daemon 镜像加速（推荐）**
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://docker.m.daocloud.io",
+    "https://dockerproxy.net"
+  ]
+}
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 验证是否生效
+sudo docker pull redis:7-alpine
+```
+
+说明：
+
+- `registry-mirrors` 只对 Docker Hub 镜像生效，本项目用到的 MySQL、Redis、Nginx、Node、Maven、Temurin 都走它
+- 公共镜像站可用性会变化，上面的地址失效时换一个再试，或使用自己搭建的 mirror
+- 配置后镜像拉取、`docker build` 的基础镜像下载都会变快
+
+**方案 2：给 Docker 配置 HTTP 代理**
+
+如果服务器能访问某个代理：
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null <<'EOF'
+[Service]
+Environment="HTTP_PROXY=http://代理地址:端口"
+Environment="HTTPS_PROXY=http://代理地址:端口"
+Environment="NO_PROXY=localhost,127.0.0.1,::1"
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+
+代理必须放行 `registry-1.docker.io`、`auth.docker.io`、`production.cloudflare.docker.com`。
+
+**方案 3：Maven / npm 构建加速**
+
+Docker Hub 通了之后，镜像构建仍可能卡在依赖下载。在 `.env` 中加入：
+
+```bash
+MAVEN_MIRROR_URL=https://maven.aliyun.com/repository/public
+NPM_REGISTRY=https://registry.npmmirror.com
+```
+
+然后重新构建：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml build --no-cache
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+```
+
+**方案 4：离线导入镜像**
+
+在能联网的机器上构建并导出：
+
+```bash
+docker compose build
+docker save game-companion/server:latest game-companion/web:latest | gzip > gc-images.tar.gz
+# 同时导出基础镜像：mysql:8.0 redis:7-alpine
+
+scp gc-images.tar.gz user@服务器:/tmp/
+```
+
+服务器导入：
+
+```bash
+docker load < /tmp/gc-images.tar.gz
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+```
+
+排查顺序建议：先确认 `sudo docker pull redis:7-alpine` 能成功，再执行 `up -d --build`。
+
 ### 6. 构建与本地验收
 
 ```bash

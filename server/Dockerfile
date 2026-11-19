@@ -4,6 +4,15 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /build
 
+# 可选：国内 Maven 镜像，例如 https://maven.aliyun.com/repository/public
+# 通过 .env 的 MAVEN_MIRROR_URL 传入；为空时使用 Maven Central
+ARG MAVEN_MIRROR_URL=
+RUN if [ -n "$MAVEN_MIRROR_URL" ]; then \
+        mkdir -p /root/.m2 && \
+        printf '<settings><mirrors><mirror><id>build-mirror</id><mirrorOf>*</mirrorOf><url>%s</url></mirror></mirrors></settings>' "$MAVEN_MIRROR_URL" > /root/.m2/settings.xml && \
+        echo "Maven mirror: $MAVEN_MIRROR_URL"; \
+    fi
+
 # 先只拷贝 pom，利用 Docker 层缓存避免每次改代码都重新下载依赖
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline

@@ -4,6 +4,11 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
+# 可选：国内 npm 镜像，例如 https://registry.npmmirror.com
+# 通过 .env 的 NPM_REGISTRY 传入；为空时使用官方源
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
+
 COPY package.json package-lock.json ./
 RUN npm ci
 
