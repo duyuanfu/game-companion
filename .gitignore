@@ -53,3 +53,9 @@ Desktop.ini
 
 # AI 工具本地配置
 .codebuddy/
+
+# Docker 部署：本地环境变量与商户证书
+.env
+docker/certs/*.pem
+docker/certs/*.p12
+docker/certs/*.key

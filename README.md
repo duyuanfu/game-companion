@@ -807,7 +807,184 @@ platform:
 * **陪练**：多游戏入驻申请（截图 + 原声选填）、入驻状态四态分流、工作台（上下线、待接单、服务中）、接单、申请完结、收益与提现
 * **管理员**：经营大盘、入驻审核（凭证大图/音频）、提现审核、待接单队列、待通知队列、平台热配置（密钥不回显）
 
-### 5. 构建与本地验收
+### 5. Docker 部署（推荐）
+
+服务器只需安装 Docker 24+ 与 Docker Compose v2，镜像内已包含 JDK、Nginx、Node 构建环境。
+
+#### 5.1 目录与文件
+
+```text
+game-companion/
+├── docker-compose.yml          # MySQL + Redis + 后端 + Web
+├── .env.docker.example         # 环境变量模板
+├── docker/certs/               # 微信支付商户证书（不提交）
+├── server/Dockerfile
+└── web/Dockerfile
+```
+
+架构：
+
+```text
+公网 443（宿主机 Nginx/Caddy 终止 TLS，可选）
+  │
+  ▼
+web 容器 :80（Nginx：静态资源 + /api 反向代理）
+  │
+  ▼
+server 容器 :8088（Spring Boot）
+  ├── mysql 容器 :3306
+  └── redis 容器 :6379
+```
+
+后端、MySQL、Redis 都只在 Compose 内部网络暴露，不对公网开放。
+
+#### 5.2 首次部署
+
+```bash
+cd /opt/game-companion
+
+# 1. 准备环境变量
+cp .env.docker.example .env
+chmod 600 .env
+vi .env
+
+# 2. 构建并启动
+docker compose up -d --build
+
+# 3. 查看状态
+docker compose ps
+
+# 4. 健康检查
+curl -s http://127.0.0.1/api/health
+```
+
+健康检查应返回：
+
+```json
+{"code":200,"data":{"name":"PP电竞鼠 (PP Esports)"}}
+```
+
+首次启动时，MySQL 数据卷为空，会自动执行 `server/src/main/resources/init_schema.sql` 建库建表并写入游戏品类与演示数据。
+
+> `init_schema.sql` 含 `DROP TABLE`，只会在数据卷为空时执行一次；后续重启不会重复执行。
+
+#### 5.3 已有数据库升级
+
+不要再执行 `init_schema.sql`，改为执行增量迁移：
+
+```bash
+# 先备份
+docker compose exec -T mysql sh -c \
+  'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction game_companion' \
+  > backup_$(date +%F).sql
+
+# 执行迁移（脚本可重复执行，遇到重复数据会中止提示）
+docker compose exec -T mysql sh -c \
+  'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game_companion' \
+  < server/src/main/resources/db/migration_web_launch.sql
+```
+
+#### 5.4 HTTPS
+
+微信 H5 支付、真实域名访问都需要 HTTPS。两种方式：
+
+**方式 A：宿主机 Nginx 终止 TLS（推荐）**
+
+将 `.env` 的 `WEB_PORT` 改为 `8080`（避免占用 80），再用宿主机 Nginx 转发：
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.example;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.example;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
+
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+
+        # SSE 必须关闭缓冲
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+**方式 B：直接用 80 端口**
+
+`WEB_PORT=80`，由云厂商负载均衡或 CDN 处理 HTTPS，再回源到服务器 80。
+
+无论哪种方式，`.env` 中的 `WEB_BASE_URL`、`CORS_ALLOWED_ORIGINS`、`WX_PAY_NOTIFY_URL` 都必须使用最终 HTTPS 域名。
+
+#### 5.5 微信支付证书
+
+```bash
+cp apiclient_key.pem apiclient_cert.pem docker/certs/
+chmod 600 docker/certs/*.pem
+docker compose restart server
+```
+
+`docker/certs` 挂载到容器内 `/opt/certs`，与 `.env` 默认路径一致。该目录下的证书已被 `.gitignore` 忽略。
+
+#### 5.6 常用运维命令
+
+```bash
+# 查看日志
+docker compose logs -f server
+docker compose logs -f web
+
+# 改代码后重建
+git pull
+docker compose up -d --build
+
+# 只重启后端
+docker compose restart server
+
+# 停止（保留数据）
+docker compose down
+
+# 停止并删除所有数据卷（危险：会清空数据库、Redis 和上传文件）
+docker compose down -v
+
+# 进入数据库
+docker compose exec mysql sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD" game_companion'
+```
+
+数据卷：
+
+| 卷名 | 内容 |
+| :--- | :--- |
+| `game-companion_mysql-data` | MySQL 数据 |
+| `game-companion_redis-data` | Redis AOF |
+| `game-companion_uploads` | 用户上传的头像、截图、音频 |
+
+`uploads` 是后端 `/app/uploads` 的持久化卷，删除后已上传文件将无法访问。
+
+#### 5.7 Docker 部署注意事项
+
+- 生产环境务必修改 `.env` 中所有默认密码，`.env` 不要提交到 Git
+- `PLATFORM_PAYMENT_MODE=wechat` 时，未配置商户参数会导致支付报错，这是预期行为，不会假成功
+- `BOOTSTRAP_ADMIN_*` 只在第一次启动时创建管理员，创建成功后请删除并重启
+- 镜像构建需要访问 Docker Hub、Maven Central、npm Registry；国内服务器建议配置镜像加速
+- 服务器建议 2 核 4G 以上，首次构建 JVM 与 Node 比较吃内存
+- MySQL 首次初始化需要几十秒，`docker compose up` 后请等待健康检查通过
+
+### 6. 构建与本地验收
 
 ```bash
 # 本地/CI 先跑测试；生产打包跳过测试，避免测试库操作误伤数据
@@ -826,7 +1003,7 @@ npm run build
 
 前端产物：`web/dist/`
 
-### 6. 生产部署架构
+### 7. 生产部署架构
 
 推荐同源部署：
 
@@ -849,9 +1026,9 @@ Nginx
 - MySQL、Redis 只允许内网访问
 - 微信支付回调地址必须是公网 HTTPS
 
-### 7. 后端部署
+### 8. 后端部署
 
-#### 7.1 数据库
+#### 8.1 数据库
 
 首次全新部署：
 
@@ -884,7 +1061,7 @@ mysql -uroot -p game_companion < server/src/main/resources/db/migration_web_laun
 
 若库中已存在重复手机号、重复支付单号、重复技能或重复游戏名，脚本会中止并提示，需先人工合并，不会静默删除数据。
 
-#### 7.2 环境变量
+#### 8.2 环境变量
 
 ```bash
 SPRING_PROFILES_ACTIVE=prod
@@ -919,7 +1096,7 @@ BOOTSTRAP_ADMIN_NICKNAME=平台管理员
 - `AUTH_MOCK_LOGIN_ENABLED=true`
 - `PLATFORM_DEV_TOOLS_ENABLED=true`
 
-#### 7.3 部署 jar 与 systemd 服务
+#### 8.3 部署 jar 与 systemd 服务
 
 ```bash
 sudo useradd --system --home /opt/game-companion --shell /usr/sbin/nologin game || true
@@ -963,9 +1140,9 @@ curl http://127.0.0.1:8088/api/health
 {"code":200,"data":{"name":"PP电竞鼠 (PP Esports)"}}
 ```
 
-### 8. Web 前端与 Nginx
+### 9. Web 前端与 Nginx
 
-#### 8.1 构建与发布
+#### 9.1 构建与发布
 
 ```bash
 cd web
@@ -976,7 +1153,7 @@ sudo mkdir -p /var/www/pp-esports
 sudo cp -r dist/* /var/www/pp-esports/
 ```
 
-#### 8.2 Nginx 配置
+#### 9.2 Nginx 配置
 
 ```nginx
 server {
@@ -1026,7 +1203,7 @@ SSE 说明：
 - Nginx 必须关闭 `proxy_buffering`，后端已返回 `X-Accel-Buffering: no`
 - token 通过查询参数传递，生产建议后续替换为短期 stream ticket
 
-### 9. 微信支付与退款
+### 10. 微信支付与退款
 
 按终端选择：
 
@@ -1056,9 +1233,9 @@ WX_PAY_TRANSFER_SCENE_ID=商家转账场景ID
 - 当前退款仅支持业务定义的全额退款场景：待接单客户撤回、接单超时、服务超时、管理员仲裁退款
 - **上线前需补退款异步回调**：当前退款 `notify_url` 复用 `/api/pay/notify`，而该接口只解析支付通知；微信退款返回 `PROCESSING` 时，最终状态需要独立 `/pay/refund-notify` 或主动查询退款结果，否则可能出现平台已显示退款但微信仍在处理中的对账风险
 
-### 10. 上线检查与排障
+### 11. 上线检查与排障
 
-#### 10.1 上线前检查
+#### 11.1 上线前检查
 
 - [ ] `init_schema.sql` 只用于新库，存量库已备份并执行迁移
 - [ ] `sys_user.phone`、`pay_flow.order_sn` 唯一键已生效
@@ -1072,7 +1249,7 @@ WX_PAY_TRANSFER_SCENE_ID=商家转账场景ID
 - [ ] 8088、MySQL、Redis 未暴露公网
 - [ ] 备份任务、日志轮转、systemd 自启已配置
 
-#### 10.2 常用排障
+#### 11.2 常用排障
 
 ```bash
 # 后端日志
