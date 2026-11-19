@@ -1,0 +1,15 @@
+# 2C2G 低内存配置
+# 通过 docker-compose.lowmem.yml 挂载到 /etc/mysql/conf.d/zz-lowmem.cnf
+[mysqld]
+innodb_buffer_pool_size=192M
+innodb_log_buffer_size=16M
+max_connections=50
+performance_schema=OFF
+table_open_cache=256
+table_definition_cache=400
+tmp_table_size=16M
+max_heap_table_size=16M
+sort_buffer_size=1M
+join_buffer_size=1M
+read_buffer_size=512K
+read_rnd_buffer_size=512K

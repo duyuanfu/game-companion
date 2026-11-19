@@ -1,0 +1,10 @@
+# 2C2G 低内存覆盖配置
+# 用法（HTTP）：
+#   docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+# 用法（HTTPS）：
+#   docker compose -f docker-compose.yml -f docker-compose.lowmem.yml -f docker-compose.https.yml up -d
+
+services:
+  mysql:
+    volumes:
+      - ./docker/mysql/lowmem.cnf:/etc/mysql/conf.d/zz-lowmem.cnf:ro

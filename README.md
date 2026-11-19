@@ -1158,6 +1158,80 @@ docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 
 排查顺序建议：先确认 `sudo docker pull redis:7-alpine` 能成功，再执行 `up -d --build`。
 
+#### 5.11 2C2G 低配服务器
+
+可以部署，但必须遵守下面三点，否则容易出现构建时内存打满、SSH 无法登录。
+
+**1. 先加 swap（强烈建议）**
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo sysctl -w vm.swappiness=10
+free -h
+```
+
+**2. 不要用 `up -d --build`**
+
+`up --build` 会一边构建 Maven/Node 镜像，一边把 MySQL 和 JVM 拉起来，2G 内存很容易被吃满。
+
+正确顺序：
+
+```bash
+# 先构建（此时数据库还没启动）
+sudo docker compose -f docker-compose.yml -f docker-compose.lowmem.yml build
+
+# 再启动
+sudo docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+```
+
+**3. 使用低内存覆盖配置**
+
+`docker-compose.lowmem.yml` 会把 `docker/mysql/lowmem.cnf` 挂进 MySQL，主要调整：
+
+- `innodb_buffer_pool_size=192M`
+- `performance_schema=OFF`（可省 100–200MB）
+- `max_connections=50`
+- 各类 buffer 下调
+
+JVM 默认值也已改为适合 2G 的 `-Xms256m -Xmx512m -XX:MaxMetaspaceSize=256m`。
+
+如果你之前已经生成过 `.env`，需要手动改一行（`.env.docker.example` 的更新不会自动同步）：
+
+```bash
+JAVA_OPTS="-Xms256m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC"
+```
+
+**4. 构建仍然失败时**
+
+在本地或 CI 构建，再导出到服务器：
+
+```bash
+# 本地
+docker compose build
+docker save game-companion/server:latest game-companion/web:latest | gzip > gc-images.tar.gz
+scp gc-images.tar.gz user@服务器:/tmp/
+
+# 服务器
+docker load < /tmp/gc-images.tar.gz
+sudo docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+```
+
+**5. 部署后检查**
+
+```bash
+free -h
+docker stats --no-stream
+sudo dmesg | grep -i 'killed process'
+```
+
+`docker stats` 中 server 常驻 RSS 建议低于 800MB。若 `dmesg` 仍有 oom-kill，继续降低 `-Xmx` 到 384m，或升级到 4G。
+
+2C2G 的合理预期：日活几十到一两百、峰值在线 20–50 人。上传大文件、批量导出会明显变慢。
+
 ### 6. 构建与本地验收
 
 ```bash

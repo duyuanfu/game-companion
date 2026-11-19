@@ -4,6 +4,9 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /build
 
+# 限制构建期 JVM 内存，避免 2C2G 服务器编译时 OOM
+ENV MAVEN_OPTS="-Xmx640m"
+
 # 可选：国内 Maven 镜像，例如 https://maven.aliyun.com/repository/public
 # 通过 .env 的 MAVEN_MIRROR_URL 传入；为空时使用 Maven Central
 ARG MAVEN_MIRROR_URL=

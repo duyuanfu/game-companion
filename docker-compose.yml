@@ -67,7 +67,8 @@ services:
       SERVER_PORT: 8088
       # Nginx 会传 X-Forwarded-*，交给 Spring 还原协议与端口，保证上传文件 URL 正确
       SERVER_FORWARD_HEADERS_STRATEGY: framework
-      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseG1GC}
+      # 默认按 2C2G 服务器设置；4G 以上可在 .env 中覆盖为 -Xmx1g
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC}
 
       SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-game_companion}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true"
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:-game_companion}

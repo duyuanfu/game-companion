@@ -4,6 +4,9 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
+# 限制构建期 Node 堆，避免 2C2G 服务器构建时 OOM
+ENV NODE_OPTIONS="--max-old-space-size=768"
+
 # 可选：国内 npm 镜像，例如 https://registry.npmmirror.com
 # 通过 .env 的 NPM_REGISTRY 传入；为空时使用官方源
 ARG NPM_REGISTRY=
