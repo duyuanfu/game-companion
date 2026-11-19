@@ -935,7 +935,11 @@ server {
 
 ```bash
 cp apiclient_key.pem apiclient_cert.pem docker/certs/
+
+# 容器内以 UID 10001 运行，必须让该用户可读，否则支付初始化会报 Permission denied
+sudo chown 10001:10001 docker/certs/*.pem
 chmod 600 docker/certs/*.pem
+
 docker compose restart server
 ```
 

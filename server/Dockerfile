@@ -26,7 +26,9 @@ ENV TZ=Asia/Shanghai \
 
 COPY --from=build /build/target/game-companion-server-*.jar /app/app.jar
 
-RUN addgroup -S app && adduser -S app -G app \
+# 固定 UID/GID，便于宿主机挂载证书与文件时对齐权限
+RUN addgroup -S -g 10001 app \
+    && adduser -S -u 10001 -G app app \
     && mkdir -p /app/uploads \
     && chown -R app:app /app
 
