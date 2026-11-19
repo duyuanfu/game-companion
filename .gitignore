@@ -50,3 +50,6 @@ server/uploads/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# AI 工具本地配置
+.codebuddy/

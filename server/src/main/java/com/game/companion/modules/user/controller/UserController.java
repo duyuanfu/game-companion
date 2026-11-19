@@ -7,6 +7,9 @@ import com.game.companion.common.exception.ApiException;
 import com.game.companion.common.security.AuthGuard;
 import com.game.companion.common.security.DevToolGuard;
 import com.game.companion.modules.user.dto.BindPhoneDTO;
+import com.game.companion.modules.user.dto.ChangePasswordDTO;
+import com.game.companion.modules.user.dto.PasswordLoginDTO;
+import com.game.companion.modules.user.dto.RegisterDTO;
 import com.game.companion.modules.user.dto.WxLoginDTO;
 import com.game.companion.modules.user.entity.SysUser;
 import com.game.companion.modules.user.service.UserService;
@@ -36,6 +39,25 @@ public class UserController {
     public CommonResult<UserLoginVO> wxLogin(@Valid @RequestBody WxLoginDTO dto) {
         UserLoginVO loginVO = userService.wxSilentLogin(dto);
         return CommonResult.success(loginVO);
+    }
+
+    @PostMapping("/login")
+    @Operation(summary = "Web 手机号 + 密码登录")
+    public CommonResult<UserLoginVO> passwordLogin(@Valid @RequestBody PasswordLoginDTO dto) {
+        return CommonResult.success(userService.passwordLogin(dto));
+    }
+
+    @PostMapping("/register")
+    @Operation(summary = "Web 手机号注册并自动登录")
+    public CommonResult<UserLoginVO> register(@Valid @RequestBody RegisterDTO dto) {
+        return CommonResult.success(userService.register(dto));
+    }
+
+    @PostMapping("/change-password")
+    @Operation(summary = "修改当前登录用户密码")
+    public CommonResult<String> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
+        userService.changePassword(authGuard.currentUserId(), dto);
+        return CommonResult.success("密码修改成功");
     }
 
     @GetMapping("/info")

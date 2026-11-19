@@ -44,7 +44,7 @@ public class HealthController {
     public CommonResult<Map<String, Object>> health() {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("app", APP_ID);
-        data.put("name", "开黑搭子 (Game Companion)");
+        data.put("name", "PP电竞鼠 (PP Esports)");
         data.put("port", serverPort);
         data.put("contextPath", contextPath);
         data.put("baseUrl", "http://<host>:" + serverPort + contextPath);

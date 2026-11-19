@@ -1,4 +1,6 @@
 # 游戏陪玩/开黑搭子微信小程序 (Game Companion)
+> 当前 Web 产品名：**PP电竞鼠**；历史文档中的“开黑搭子”为旧称。
+
 
 本项目为一款游戏开黑陪练预约系统的完整商业级全栈研发仓库。
 
@@ -11,7 +13,7 @@
 - [四、 落地商业级功能全景清单 (全量通过自动化单元测试)](#四-落地商业级功能全景清单-全量通过自动化单元测试)
 - [五、 用户登录、手机号授权与微信身份机制](#五-用户登录手机号授权与微信身份机制)
 - [六、 微信小程序账号申请、主体类目与工信部备案保姆级指南](#六-微信小程序账号申请主体类目与工信部备案保姆级指南)
-- [七、 微信官方订阅消息（服务通知卡片）配置与上线指引](#七-微信官方订阅消息服务通知卡片配置与上线指引)
+- [七、 消息通知链路配置与上线检查](#七-消息通知链路配置与上线检查)
 - [八、 自动化单元测试验证报告](#八-自动化单元测试验证报告)
 - [九、 平台安全与鉴权模型（默认拒绝）](#九-平台安全与鉴权模型默认拒绝)
 - [十、 自动化运维：订单超时调度](#十-自动化运维订单超时调度)
@@ -28,7 +30,7 @@
 * **统一支付网关 (策略模式解耦)**：
   - 默认启用 `MockPaymentService`（开发期免商户号一键模拟付款与退款回调）；
   - 预留 `WechatV3PaymentServiceImpl`（商户号申请下发后，填入配置秒级无缝热切换真实微信支付 V3 与商家转账到零钱）；
-* **消息通知中心 (`NoticeService`)**：微信小程序订阅消息卡片推送、微信服务号模板消息强提醒与短信通道兜底防漏单；
+* **通知中心 (`NoticeService`)**：微信订阅消息已下线，改为 `notice_log` 线下通知事件队列 + 管理员手机端「待通知」Tab 人工兜底（详见第四章「消息通知机制」）；
 * **高并发与并发安全**：基于 **Redisson 分布式锁 + 数据库乐观锁** 保障交易与资金账户并发安全；
 * **手机端管理员工作台 (`admin`)**：支持管理员在线核验段位截图、试听原声音频、一键审批/驳回入驻申请、审批提现打款、售后维权仲裁及秒级热配置经营参数。
 
@@ -146,7 +148,7 @@ $$
 | **10** | `wallet_flow` | 财务流水域 | 钱包资金变动金融级明细流水。每一笔订单入账、提现冻结、打款扣除、驳回解冻强制双向记账，包含前后余额快照。 |
 | **11** | `withdraw_record` | 提现审批域 | 陪练师提现申请与打款记录。对接微信“商家转账到零钱”，包含申请金额、预留手续费 (`fee`)、实际打款额 (`actual_amount`)、微信批次单号 (`wechat_batch_id`) 与审核状态。 |
 | **12** | `chat_message` | 即时通讯域 | 开黑专属房间即时聊天记录表。按订单号天然隔离房间，记录双方沟通消息与系统广播。 |
-| **13** | `notice_log` | 消息监控域 | （后期预留）派单通知日志表。用于监控微信订阅消息、服务号模板与短信下发触达率。 |
+| **13** | `notice_log` | 通知事件域 | 平台线下通知事件队列。订单 / 审核 / 维权事件落库，供管理员「待通知」Tab 人工跟进，含当事人昵称、手机号、金额与完成时间。 |
 | **14** | `sys_config` | 运营配置域 | 平台全局参数动态配置表。手机端管理员在线修改 AppID、Secret、商户号、APIv3Key、抽成比例，**秒级热生效（零重启）**。 |
 
 ---
@@ -466,40 +468,28 @@ $$
 
 ---
 
-## 七、 微信官方订阅消息（服务通知卡片）配置与上线指引
+## 七、 消息通知链路配置与上线检查
 
-当玩家下单付款后，系统会直接向陪玩师手机微信的「服务通知」推送官方订单卡片。陪玩师点击卡片，**微信会自动拉起小程序并直接打开该订单的接单界面**！
+> 微信小程序订阅消息（一次性配额）已于 v1.1 阶段**全线下线**，详见第四章「消息通知机制」。
+> 平台改为「**站内即时提示 + 管理员线下通知兜底 + 订单超时自动退款**」三重链路，**上线无需申请任何订阅消息模板**。
 
-### 1. 微信公众平台申请模板步骤
-1. 登录 [微信公众平台 (mp.weixin.qq.com)](https://mp.weixin.qq.com/)；
-2. 点击：**功能 -> 订阅消息 -> 公共模板库**；
-3. 搜索添加：**“新订单提醒”** 或 **“待接单提醒”**，选用字段：
-   - 订单编号（`character_string1`）
-   - 服务项目/游戏（`thing2`）
-   - 订单金额（`amount3`）
-   - 温馨提示/需求（`thing4`）
-4. 在“我的模板”中复制生成的 **模板ID (`Template ID`)**。
+### 1. 链路组成
 
-### 2. 激活真实推送配置
-> 推荐在**管理员手机端热配置中心**填写（秒级生效，无需重启服务）：
-> 小程序「我的 → 连击 5 次管理员暗门 → 支付与配置 → 新订单模板ID」。
+| 层级 | 实现 | 需要配置 |
+| :--- | :--- | :--- |
+| ① 站内即时提示 | `App.vue` 全局轮询 → 「待接单」Tab + TabBar 红点角标 + 马达震动 + Toast | 无 |
+| ② 平台线下通知 | 事件落库 `notice_log`，管理员工作台「📢 待通知」/「📋 待接单」Tab 展示昵称 + 手机号 | 无 |
+| ③ 资金兜底 | 10 分钟未接单，`OrderTimeoutScheduler` 自动原路全额退款并冲正 `pay_flow` | `platform.order-accept-timeout-minutes`（默认 10） |
 
-也可通过本地私有配置 `server/src/main/resources/application-local.yml`（已 gitignore）或环境变量注入：
-```yaml
-# application-local.yml（推荐，不会进入版本库）
-wx:
-  miniapp:
-    appid: "你的微信小程序真实AppID"
-    secret: "你的微信小程序真实AppSecret"
-    template-id:
-      new-order: "你的新订单提醒模板ID"
-```
-```powershell
-# 或使用环境变量
-$env:WX_MINIAPP_TEMPLATE_NEW_ORDER = "你的新订单提醒模板ID"
-```
-> ⚠️ 模板 ID 与 AppSecret 请勿写入 `application.yml`（该文件会进入版本库），详见 [第十一章 敏感配置与密钥治理](#十一-敏感配置与密钥治理)。
+### 2. 上线前检查
 
+1. 客户下单支付成功 → 陪玩师端 TabBar 出现红点，进入「待接单」Tab 能看到该订单；
+2. 管理员工作台「📢 待通知」出现「新订单待接单」事件（含陪玩师昵称与手机号）；
+3. 点击「📞 拨打陪玩师」可正常唤起微信拨号；
+4. 把订单 `create_time` 调整为 11 分钟前，等待调度扫描（默认 60 秒）→ 订单应自动流转「已退款(6)」，`pay_flow` 同步冲正；
+5. 全程不依赖任何微信订阅消息模板。
+
+> 注：管理员「支付与配置」中残留的「新订单模板ID」输入项已无下发逻辑，填写与否均不影响通知链路。
 
 ---
 
@@ -673,7 +663,6 @@ $env:SPRING_PROFILES_ACTIVE = "prod"
 **顺带建议（可选但推荐）：**
 * 若该仓库是公开仓库或曾推送到第三方 Git 服务，建议在 GitHub 仓库设置中启用 **「推送保护 / Push Protection」**，并在仓库中提示后来者**不要使用历史密钥**
 * 若有条件，可对历史提交做一次 `git filter-repo` 清理（**注意：会重写提交历史，需团队协商后执行**）
-* 订阅消息模板 ID 虽非严格意义上的密钥，但同样建议在热配置中心重新确认
 
 ### ☐ 2. 配置微信支付异步回调地址 `/pay/notify`
 
@@ -718,16 +707,16 @@ $env:SPRING_PROFILES_ACTIVE = "prod"
    * 下单 → 前端应拉起真实 `wx.requestPayment` 支付面板
    * 支付完成后查库：`pay_flow` 应新增一条 `pay_status = 1` 的记录，`channel_fee` 为 0.6% 通道费
    * `companion_order.order_status` 应流转为 **1（已付款待接单）**
-   * 陪练师应收到微信服务通知卡片
+   * 管理员工作台「📢 待通知」应出现该订单的「新订单待接单」事件
 
-### ☐ 3. 补齐订阅消息模板 ID
+### ☐ 3. 验证通知链路（无需订阅消息模板）
 
-微信订阅消息的模板 ID **不写在代码里**，统一在管理员热配置中心配置：
+微信订阅消息已全线下线，**不需要也不应再申请**任何模板 ID，通知链路为「站内提示 + 管理员线下通知 + 超时退款」：
 
-1. 微信公众平台 → **功能 → 订阅消息 → 公共模板库** → 搜索添加「新订单提醒」/「待接单提醒」
-2. 复制生成的 **Template ID**
-3. 小程序「我的 → 连击 5 次管理员暗门 → 支付与配置」→ 填入 **新订单模板ID** → 保存（秒级生效）
-4. 验证：陪练师在工作台开启接单时授权订阅 → 客户下单 → 陪练师微信收到「服务通知」卡片
+1. 客户下单支付 → 陪玩师端 TabBar 红点，且「待接单」Tab 实时可见该订单；
+2. 管理员工作台「📢 待通知」出现「新订单待接单」事件（含陪玩师昵称、手机号），可一键拨号；
+3. 下单后 10 分钟无人接单 → 订单自动流转「已退款(6)」且 `pay_flow` 冲正；
+4. 详细链路说明见 [第七章](#七-消息通知链路配置与上线检查)。
 
 ### ☐ 4. 关闭开发期特权开关
 
@@ -751,4 +740,358 @@ platform:
 * 设置 `platform.commission-rate`（建议 **3%~5%**，切勿 0% 免佣，微信 0.6% 通道费会倒贴）
 * 首次上线前执行一次 `mvn test -Dtest=OrderFlowIntegrationTest` 确认核心链路无回归
 
+---
 
+## 十三、React Web 前端（`web/`）
+
+### 1. 技术栈与工程位置
+
+Web 端是独立于 `server/`、`miniapp/` 的第三个工程，目录为 `web/`：
+
+* **Vite 5 + React 18 + TypeScript**
+* **React Router 6**：路由与角色守卫
+* **TanStack Query 5**：服务端状态、轮询与缓存失效
+* **Tailwind CSS + shadcn/ui 风格组件**（Radix 原语）
+* **React Hook Form + zod**：入驻申请与配置表单校验
+* **Vitest + Testing Library**：金额、状态映射、时间与 API 客户端单测
+
+### 2. 本地启动
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+* 访问地址：`http://localhost:5174`
+* `/api` 由 Vite 代理到 `http://localhost:8088`，与小程序、后端端口约定一致
+* 可通过 `VITE_API_PROXY_TARGET` 覆盖代理目标，通过 `VITE_API_BASE_URL` 覆盖前端 API 基地址
+
+### 3. 登录方式
+
+**生产/公网**：手机号 + 密码注册、登录。管理员使用同一入口，角色由后端 `sys_user.role` 决定，登录后自动进入管理后台；不再使用 mock 身份。
+
+首次部署可通过环境变量创建管理员：
+
+```bash
+BOOTSTRAP_ADMIN_PHONE=13800000000
+BOOTSTRAP_ADMIN_PASSWORD=至少8位密码
+BOOTSTRAP_ADMIN_NICKNAME=平台管理员
+```
+
+创建成功后请从部署环境中移除这三个变量。生产配置必须保持：
+
+```yaml
+auth:
+  mock-login-enabled: false
+platform:
+  dev-tools-enabled: false
+```
+
+**本地开发**：登录页保留客户/陪练/管理员三个开发快捷入口，仅在 `import.meta.env.DEV` 下显示；需要：
+
+```yaml
+auth:
+  mock-login-enabled: true
+platform:
+  dev-tools-enabled: true
+```
+
+`application-dev.yml` 已默认开启。生产构建会隐藏开发快捷入口，后端也会拒绝 `mock_` 前缀登录。
+
+> 当前版本为手机号 + 密码，已接入 Redis 登录失败限流（同一手机号 15 分钟失败 5 次、同一 IP 失败 30 次会暂时锁定）。短信验证码、找回密码尚未接入，公网运营前建议补充短信服务商。
+
+### 4. 已覆盖页面
+
+* **客户**：精选陪练、游戏筛选、陪练详情/技能/原声/评价、确认下单、订单列表与详情、待接单倒计时、撤回/确认/维权、订单内聊天、评价、个人资料、钱包流水
+* **陪练**：多游戏入驻申请（截图 + 原声选填）、入驻状态四态分流、工作台（上下线、待接单、服务中）、接单、申请完结、收益与提现
+* **管理员**：经营大盘、入驻审核（凭证大图/音频）、提现审核、待接单队列、待通知队列、平台热配置（密钥不回显）
+
+### 5. 构建与本地验收
+
+```bash
+# 本地/CI 先跑测试；生产打包跳过测试，避免测试库操作误伤数据
+cd server
+mvn test
+mvn clean package -DskipTests
+
+cd ../web
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+后端产物：`server/target/game-companion-server-1.0.0-SNAPSHOT.jar`
+
+前端产物：`web/dist/`
+
+### 6. 生产部署架构
+
+推荐同源部署：
+
+```text
+浏览器
+  │ HTTPS 443
+  ▼
+Nginx
+  ├── /            → /var/www/pp-esports (web/dist)
+  └── /api/*       → 127.0.0.1:8088 (Spring Boot)
+                         ├── MySQL 8
+                         └── Redis 7
+```
+
+要求：
+
+- Linux 服务器，JDK 17、Maven 3.9+、Node.js 20+、MySQL 8、Redis 7、Nginx
+- 域名已备案，HTTPS 证书有效
+- 后端 8088 只监听内网/本机，不对公网开放
+- MySQL、Redis 只允许内网访问
+- 微信支付回调地址必须是公网 HTTPS
+
+### 7. 后端部署
+
+#### 7.1 数据库
+
+首次全新部署：
+
+```bash
+mysql -uroot -p -e "CREATE DATABASE game_companion DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -uroot -p game_companion < server/src/main/resources/init_schema.sql
+```
+
+> `init_schema.sql` 会先 `DROP TABLE`，只能用于全新库，禁止直接在生产存量库执行。
+
+已有数据库升级：
+
+```bash
+# 先备份
+mysqldump -uroot -p --single-transaction game_companion > game_companion_backup_$(date +%F).sql
+
+# 使用 mysql CLI 执行，脚本包含 DELIMITER 过程定义
+mysql -uroot -p game_companion < server/src/main/resources/db/migration_web_launch.sql
+```
+
+迁移脚本会补齐：
+
+- `sys_user.password_hash` 与手机号唯一键
+- 提现人工打款字段
+- `pay_flow.order_sn` 唯一键
+- `chat_message.message_type`
+- `chat_read_state` 已读表
+- `chat_room` 聊天室摘要表及历史会话回填
+- `companion_skill`、`game_category` 唯一键
+
+若库中已存在重复手机号、重复支付单号、重复技能或重复游戏名，脚本会中止并提示，需先人工合并，不会静默删除数据。
+
+#### 7.2 环境变量
+
+```bash
+SPRING_PROFILES_ACTIVE=prod
+SERVER_PORT=8088
+
+SPRING_DATASOURCE_URL=jdbc:mysql://内网MySQL:3306/game_companion?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+SPRING_DATASOURCE_USERNAME=game_companion
+SPRING_DATASOURCE_PASSWORD=强密码
+
+SPRING_DATA_REDIS_HOST=内网Redis
+SPRING_DATA_REDIS_PORT=6379
+SPRING_DATA_REDIS_PASSWORD=Redis密码
+SPRING_DATA_REDIS_DATABASE=0
+
+WEB_BASE_URL=https://web.你的域名
+CORS_ALLOWED_ORIGINS=https://web.你的域名
+
+PLATFORM_DEV_TOOLS_ENABLED=false
+AUTH_MOCK_LOGIN_ENABLED=false
+PLATFORM_PAYMENT_MODE=wechat
+KNIFE4J_ENABLE=false
+
+# 首次创建管理员，创建成功后从环境变量移除
+BOOTSTRAP_ADMIN_PHONE=13800000000
+BOOTSTRAP_ADMIN_PASSWORD=至少8位强密码
+BOOTSTRAP_ADMIN_NICKNAME=平台管理员
+```
+
+生产禁止：
+
+- `app.demo-accounts.enabled=true`（演示账号仅 dev profile）
+- `AUTH_MOCK_LOGIN_ENABLED=true`
+- `PLATFORM_DEV_TOOLS_ENABLED=true`
+
+#### 7.3 部署 jar 与 systemd 服务
+
+```bash
+sudo useradd --system --home /opt/game-companion --shell /usr/sbin/nologin game || true
+sudo install -d -o game -g game /opt/game-companion
+sudo cp server/target/game-companion-server-1.0.0-SNAPSHOT.jar \
+  /opt/game-companion/game-companion-server.jar
+sudo chown game:game /opt/game-companion/game-companion-server.jar
+```
+
+
+```ini
+[Unit]
+Description=PP电竞鼠 Server
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=game
+Group=game
+WorkingDirectory=/opt/game-companion
+EnvironmentFile=/etc/game-companion/server.env
+ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/game-companion/game-companion-server.jar --spring.profiles.active=prod
+Restart=always
+RestartSec=5
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now game-companion
+sudo systemctl status game-companion
+curl http://127.0.0.1:8088/api/health
+```
+
+健康检查应返回：
+
+```json
+{"code":200,"data":{"name":"PP电竞鼠 (PP Esports)"}}
+```
+
+### 8. Web 前端与 Nginx
+
+#### 8.1 构建与发布
+
+```bash
+cd web
+npm ci
+npm run build
+sudo rm -rf /var/www/pp-esports
+sudo mkdir -p /var/www/pp-esports
+sudo cp -r dist/* /var/www/pp-esports/
+```
+
+#### 8.2 Nginx 配置
+
+```nginx
+server {
+    listen 80;
+    server_name web.你的域名;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name web.你的域名;
+
+    ssl_certificate     /etc/letsencrypt/live/web.你的域名/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/web.你的域名/privkey.pem;
+
+    root /var/www/pp-esports;
+    index index.html;
+    client_max_body_size 25m;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8088/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+
+        # SSE /chat/stream 必须关闭缓冲，避免消息被 Nginx 攒批
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+SSE 说明：
+
+- 后端提供 `GET /api/chat/stream?token=...`
+- 聊天消息与陪练新订单通过 SSE 推送
+- 前端仍保留 5 秒/10 秒轮询兜底
+- Nginx 必须关闭 `proxy_buffering`，后端已返回 `X-Accel-Buffering: no`
+- token 通过查询参数传递，生产建议后续替换为短期 stream ticket
+
+### 9. 微信支付与退款
+
+按终端选择：
+
+| 终端 | 微信支付产品 | 前端行为 |
+| :--- | :--- | :--- |
+| PC 浏览器 | Native 扫码 | 返回 `codeUrl`，前端展示二维码 |
+| 手机浏览器（非微信） | H5 支付 | 返回 `h5Url`，跳转微信收银台 |
+| 微信内浏览器 | 暂不支持 | 提示在外部浏览器打开 |
+
+```bash
+WX_PAY_APP_ID=与商户号绑定且开通对应产品的 AppID
+WX_PAY_MCH_ID=微信支付商户号
+WX_PAY_API_V3_KEY=32位APIv3密钥
+WX_PAY_KEY_PATH=/opt/certs/apiclient_key.pem
+WX_PAY_CERT_PATH=/opt/certs/apiclient_cert.pem
+WX_PAY_NOTIFY_URL=https://web.你的域名/api/pay/notify
+WX_PAY_WEB_APP_URL=https://web.你的域名
+WX_PAY_TRANSFER_SCENE_ID=商家转账场景ID
+```
+
+注意：
+
+- 仓库不包含任何商户私钥、API v3 密钥或证书
+- H5 支付需在商户平台单独申请并配置已备案支付域名，不能用 `localhost`
+- H5 支付不能在微信内置浏览器使用
+- 退款原路退回，不是退现金；退款到账时间由微信决定
+- 当前退款仅支持业务定义的全额退款场景：待接单客户撤回、接单超时、服务超时、管理员仲裁退款
+- **上线前需补退款异步回调**：当前退款 `notify_url` 复用 `/api/pay/notify`，而该接口只解析支付通知；微信退款返回 `PROCESSING` 时，最终状态需要独立 `/pay/refund-notify` 或主动查询退款结果，否则可能出现平台已显示退款但微信仍在处理中的对账风险
+
+### 10. 上线检查与排障
+
+#### 10.1 上线前检查
+
+- [ ] `init_schema.sql` 只用于新库，存量库已备份并执行迁移
+- [ ] `sys_user.phone`、`pay_flow.order_sn` 唯一键已生效
+- [ ] `chat_room`、`chat_read_state` 已建表并有历史回填
+- [ ] `application-prod.yml` 生效，`dev-tools`、mock 登录、演示账号全部关闭
+- [ ] 管理员通过 `BOOTSTRAP_ADMIN_*` 创建后已移除变量
+- [ ] `CORS_ALLOWED_ORIGINS` 为正式域名，不使用 `*`
+- [ ] HTTPS 证书有效，H5 支付域名与商户平台一致
+- [ ] `WX_PAY_NOTIFY_URL` 公网可达
+- [ ] Nginx 已关闭 SSE 缓冲，上传限制 25MB
+- [ ] 8088、MySQL、Redis 未暴露公网
+- [ ] 备份任务、日志轮转、systemd 自启已配置
+
+#### 10.2 常用排障
+
+```bash
+# 后端日志
+journalctl -u game-companion -f
+
+# 健康检查
+curl -s https://web.你的域名/api/health
+
+# 检查 SSE（需要登录 token）
+curl -N "https://web.你的域名/api/chat/stream?token=你的token"
+
+# 检查 Nginx 配置
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+常见问题：
+
+- 登录 401：检查 `satoken` 请求头、CORS、登录态过期
+- 支付回调不到：检查域名、HTTPS、微信商户平台回调地址、Nginx 是否拦截 `/api/pay/notify`
+- SSE 不实时：检查 Nginx `proxy_buffering off`、代理超时、token 是否有效
+- 上传失败：检查 Nginx `client_max_body_size` 和后端 20MB/25MB 限制
+- 数据库迁移失败：先查重复手机号、支付单号、技能、游戏名，按脚本提示人工合并

@@ -29,7 +29,7 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
     @Value("${platform.channel-fee-rate:0.006}")
     private Double defaultChannelFeeRate;
 
-    @Value("${wx.miniapp.appid:}")
+    @Value("${wx.pay.appId:}")
     private String defaultAppId;
 
     @Value("${wx.miniapp.secret:}")
@@ -64,7 +64,7 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
             dto.setChannelFeePercent(0.6);
         }
 
-        dto.setAppId(getConfig("wx.miniapp.appid", defaultAppId));
+        dto.setAppId(getConfig("wx.pay.appid", defaultAppId));
         dto.setAppSecret(getConfig("wx.miniapp.secret", defaultAppSecret));
         dto.setMchId(getConfig("wx.pay.mchid", defaultMchId));
         dto.setApiV3Key(getConfig("wx.pay.apiv3key", defaultApiV3Key));
@@ -88,7 +88,7 @@ public class PlatformConfigServiceImpl implements PlatformConfigService {
                     "微信支付通道费率(%)，合同费率预估值，最终以微信交易账单对账为准");
         }
         if (dto.getAppId() != null) {
-            saveOrUpdateConfig("wx.miniapp.appid", dto.getAppId().trim(), "小程序AppID");
+            saveOrUpdateConfig("wx.pay.appid", dto.getAppId().trim(), "Web支付AppID(服务号/网站应用)");
         }
         if (dto.getAppSecret() != null) {
             saveOrUpdateConfig("wx.miniapp.secret", dto.getAppSecret().trim(), "小程序AppSecret");

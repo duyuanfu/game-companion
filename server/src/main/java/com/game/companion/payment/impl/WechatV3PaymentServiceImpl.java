@@ -21,6 +21,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Date;
 
@@ -57,6 +59,12 @@ public class WechatV3PaymentServiceImpl implements PaymentService {
     private String transferSceneId;
 
     /**
+     * H5 支付 scene_info.h5_info.app_url 使用的站点地址。
+     */
+    @Value("${wx.pay.web-app-url:}")
+    private String webAppUrl;
+
+    /**
      * 当前生效的商户服务实例（随管理员热配置自动重建）。
      */
     private WxPayService wxPayService() {
@@ -71,8 +79,9 @@ public class WechatV3PaymentServiceImpl implements PaymentService {
     @Override
     public PaymentResultVO createPayment(CreatePaymentParam param) {
         WxPayConfig config = requirePayConfig();
-        log.info("【微信支付V3】发起真实统一下单: orderSn={}, amount={}分, openid={}",
-                param.getOrderSn(), param.getAmount(), param.getClientOpenid());
+        String scene = param.getPayScene() == null ? "native" : param.getPayScene().trim().toLowerCase();
+        log.info("【微信支付V3】发起真实统一下单: orderSn={}, amount={}分, scene={}",
+                param.getOrderSn(), param.getAmount(), scene);
 
         WxPayUnifiedOrderV3Request request = new WxPayUnifiedOrderV3Request()
                 .setAppid(config.getAppId())
@@ -82,36 +91,88 @@ public class WechatV3PaymentServiceImpl implements PaymentService {
                 .setNotifyUrl(resolveNotifyUrl(config))
                 .setAmount(new WxPayUnifiedOrderV3Request.Amount()
                         .setTotal(param.getAmount())
-                        .setCurrency("CNY"))
-                .setPayer(new WxPayUnifiedOrderV3Request.Payer()
-                        .setOpenid(param.getClientOpenid()));
+                        .setCurrency("CNY"));
 
-        WxPayUnifiedOrderV3Result result;
+        if ("h5".equals(scene)) {
+            if (isBlank(param.getClientIp())) {
+                throw new ApiException("H5 支付缺少客户端 IP，无法下单");
+            }
+            String appUrl = resolveWebAppUrl(param.getReturnUrl());
+            request.setSceneInfo(new WxPayUnifiedOrderV3Request.SceneInfo()
+                    .setPayerClientIp(param.getClientIp().trim())
+                    .setH5Info(new WxPayUnifiedOrderV3Request.H5Info()
+                            .setType("Wap")
+                            .setAppName("PP电竞鼠")
+                            .setAppUrl(appUrl)));
+
+            WxPayUnifiedOrderV3Result result;
+            try {
+                result = wxPayService().createOrderV3(TradeTypeEnum.H5, request);
+            } catch (Exception e) {
+                log.error("【微信支付V3】H5 下单失败: orderSn={}, error={}", param.getOrderSn(), e.getMessage());
+                throw new ApiException("微信 H5 支付下单失败：" + e.getMessage());
+            }
+            if (result == null || isBlank(result.getH5Url())) {
+                throw new ApiException("微信 H5 支付下单失败：未获取到 h5_url");
+            }
+            return PaymentResultVO.builder()
+                    .orderSn(param.getOrderSn())
+                    .payType("wechat")
+                    .isMockPaid(false)
+                    .tradeType("H5")
+                    .h5Url(appendRedirectUrl(result.getH5Url(), param.getReturnUrl()))
+                    .build();
+        }
+
+        if ("jsapi".equals(scene)) {
+            if (isBlank(param.getClientOpenid())) {
+                throw new ApiException("JSAPI 支付缺少客户 openid");
+            }
+            request.setPayer(new WxPayUnifiedOrderV3Request.Payer()
+                    .setOpenid(param.getClientOpenid()));
+            WxPayUnifiedOrderV3Result result;
+            try {
+                result = wxPayService().createOrderV3(TradeTypeEnum.JSAPI, request);
+            } catch (Exception e) {
+                log.error("【微信支付V3】JSAPI 下单失败: orderSn={}, error={}", param.getOrderSn(), e.getMessage());
+                throw new ApiException("微信支付下单失败：" + e.getMessage());
+            }
+            if (result == null || isBlank(result.getPrepayId())) {
+                throw new ApiException("微信支付下单失败：未获取到 prepay_id");
+            }
+            WxPayUnifiedOrderV3Result.JsapiResult jsapi = result.getPayInfo(
+                    TradeTypeEnum.JSAPI, config.getAppId(), config.getMchId(), config.getPrivateKey());
+            return PaymentResultVO.builder()
+                    .orderSn(param.getOrderSn())
+                    .payType("wechat")
+                    .isMockPaid(false)
+                    .tradeType("JSAPI")
+                    .prepayId(result.getPrepayId())
+                    .timeStamp(jsapi.getTimeStamp())
+                    .nonceStr(jsapi.getNonceStr())
+                    .packageVal(jsapi.getPackageValue())
+                    .signType(jsapi.getSignType())
+                    .paySign(jsapi.getPaySign())
+                    .build();
+        }
+
+        // 默认 Native：PC 浏览器扫码支付
+        WxPayUnifiedOrderV3Result nativeResult;
         try {
-            result = wxPayService().createOrderV3(TradeTypeEnum.JSAPI, request);
+            nativeResult = wxPayService().createOrderV3(TradeTypeEnum.NATIVE, request);
         } catch (Exception e) {
-            log.error("【微信支付V3】统一下单失败: orderSn={}, error={}", param.getOrderSn(), e.getMessage());
-            throw new ApiException("微信支付下单失败：" + e.getMessage());
+            log.error("【微信支付V3】Native 下单失败: orderSn={}, error={}", param.getOrderSn(), e.getMessage());
+            throw new ApiException("微信 Native 支付下单失败：" + e.getMessage());
         }
-
-        if (result == null || result.getPrepayId() == null || result.getPrepayId().isEmpty()) {
-            throw new ApiException("微信支付下单失败：未获取到 prepay_id");
+        if (nativeResult == null || isBlank(nativeResult.getCodeUrl())) {
+            throw new ApiException("微信 Native 支付下单失败：未获取到 code_url");
         }
-
-        // 生成前端 wx.requestPayment 所需的五要素（含 RSA 签名）
-        WxPayUnifiedOrderV3Result.JsapiResult jsapi = result.getPayInfo(
-                TradeTypeEnum.JSAPI, config.getAppId(), config.getMchId(), config.getPrivateKey());
-
         return PaymentResultVO.builder()
                 .orderSn(param.getOrderSn())
                 .payType("wechat")
                 .isMockPaid(false)
-                .prepayId(result.getPrepayId())
-                .timeStamp(jsapi.getTimeStamp())
-                .nonceStr(jsapi.getNonceStr())
-                .packageVal(jsapi.getPackageValue())
-                .signType(jsapi.getSignType())
-                .paySign(jsapi.getPaySign())
+                .tradeType("NATIVE")
+                .codeUrl(nativeResult.getCodeUrl())
                 .build();
     }
 
@@ -219,5 +280,28 @@ public class WechatV3PaymentServiceImpl implements PaymentService {
             return notifyUrl.trim();
         }
         return config.getNotifyUrl();
+    }
+
+    private String resolveWebAppUrl(String returnUrl) {
+        if (webAppUrl != null && !webAppUrl.trim().isEmpty()) {
+            return webAppUrl.trim();
+        }
+        if (returnUrl != null && !returnUrl.trim().isEmpty()) {
+            return returnUrl.trim();
+        }
+        throw new ApiException("H5 支付需要配置 wx.pay.web-app-url 或 WEB_BASE_URL");
+    }
+
+    private String appendRedirectUrl(String h5Url, String returnUrl) {
+        if (returnUrl == null || returnUrl.trim().isEmpty()) {
+            return h5Url;
+        }
+        String separator = h5Url.contains("?") ? "&" : "?";
+        return h5Url + separator + "redirect_url="
+                + URLEncoder.encode(returnUrl.trim(), StandardCharsets.UTF_8);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 }

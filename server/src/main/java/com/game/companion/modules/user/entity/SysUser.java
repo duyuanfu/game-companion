@@ -35,8 +35,12 @@ public class SysUser implements Serializable {
     @Schema(description = "头像地址")
     private String avatarUrl;
 
-    @Schema(description = "手机号码 (用于接单短信兜底提醒)")
+    @Schema(description = "手机号码 (用于接单短信兜底提醒 / Web 登录账号)")
     private String phone;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Schema(description = "Web 登录密码 BCrypt 哈希 (不返回给前端)")
+    private String passwordHash;
 
     @Schema(description = "性别: 0-未知 1-男 2-女")
     private Integer gender;

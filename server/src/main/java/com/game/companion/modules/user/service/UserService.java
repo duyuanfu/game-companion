@@ -14,6 +14,21 @@ public interface UserService extends IService<SysUser> {
     UserLoginVO wxSilentLogin(WxLoginDTO dto);
 
     /**
+     * Web 手机号 + 密码登录。
+     */
+    UserLoginVO passwordLogin(com.game.companion.modules.user.dto.PasswordLoginDTO dto);
+
+    /**
+     * Web 手机号注册，注册成功后直接登录。
+     */
+    UserLoginVO register(com.game.companion.modules.user.dto.RegisterDTO dto);
+
+    /**
+     * 修改当前登录用户密码。
+     */
+    void changePassword(Long userId, com.game.companion.modules.user.dto.ChangePasswordDTO dto);
+
+    /**
      * 微信 getPhoneNumber 原生组件一键绑定手机号 (防漏单)
      */
     String bindWxPhoneNumber(Long userId, BindPhoneDTO dto);

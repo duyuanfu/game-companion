@@ -14,6 +14,11 @@ public interface CompanionOrderService extends IService<CompanionOrder> {
     PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto);
 
     /**
+     * 带客户端 IP 的下单支付（H5 支付需要 scene_info.payer_client_ip）。
+     */
+    PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto, String clientIp);
+
+    /**
      * 模拟支付成功回调 (用于开发期测试一键完成支付) —— 幂等，重复调用不会重复落支付流水
      */
     void mockPaySuccess(String orderSn);
@@ -23,6 +28,11 @@ public interface CompanionOrderService extends IService<CompanionOrder> {
      * Mock 模式下会立即模拟支付成功并流转为「待接单(1)」。
      */
     PaymentResultVO payOrder(Long clientUserId, String orderSn);
+
+    /**
+     * 带支付场景与客户端 IP 的支付发起（Web Native / H5）。
+     */
+    PaymentResultVO payOrder(Long clientUserId, String orderSn, String payScene, String clientIp);
 
     /**
      * 【支付事实落盘】记录一笔真实支付（微信V3回调 / Mock 支付）并把订单流转为「待接单」。

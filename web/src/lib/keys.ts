@@ -1,0 +1,28 @@
+export const keys = {
+  health: ["health"] as const,
+  me: ["user", "me"] as const,
+  games: ["games"] as const,
+  companions: (gameName?: string) => ["companions", gameName || "all"] as const,
+  companionSkills: (userId: number) => ["companions", userId, "skills"] as const,
+  reviews: (userId: number, page: number) => ["companions", userId, "reviews", page] as const,
+  myStatus: ["companion", "my-status"] as const,
+  workbench: ["companion", "workbench"] as const,
+  orders: (roleType: string, status: number, page: number) => ["orders", roleType, status, page] as const,
+  workbenchPendingOrders: ["companion", "workbench", "orders", "pending"] as const,
+  companionPendingCount: ["companion", "orders", "pending-count"] as const,
+  mySkills: ["companion", "skills", "mine"] as const,
+  workbenchActiveOrders: ["companion", "workbench", "orders", "active"] as const,
+  order: (orderSn: string) => ["orders", "detail", orderSn] as const,
+  reviewDetail: (orderSn: string) => ["orders", "review", orderSn] as const,
+  conversations: ["chat", "conversations"] as const,
+  chat: (roomSn: string) => ["chat", roomSn] as const,
+  walletFlows: (page: number) => ["wallet", "flows", page] as const,
+  withdraws: (page: number) => ["wallet", "withdraws", page] as const,
+  adminDashboard: ["admin", "dashboard"] as const,
+  adminAudits: (page: number) => ["admin", "audits", page] as const,
+  adminWithdrawals: (status: number | undefined, page: number) =>
+    ["admin", "withdrawals", status ?? "all", page] as const,
+  adminPendingOrders: (page: number) => ["admin", "orders", "pending", page] as const,
+  adminNotices: ["admin", "notices"] as const,
+  adminConfig: ["admin", "config"] as const
+};

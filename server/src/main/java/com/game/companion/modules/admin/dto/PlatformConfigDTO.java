@@ -16,7 +16,7 @@ public class PlatformConfigDTO {
     @Schema(description = "微信支付通道费率 (百分比数字，如 0.6 代表 0.6%)。注意：微信不提供单笔实收通道费查询接口，此为合同费率预估值，最终以微信交易账单对账为准")
     private Double channelFeePercent;
 
-    @Schema(description = "小程序 AppID")
+    @Schema(description = "Web 支付 AppID（服务号或开放平台网站应用）")
     private String appId;
 
     @Schema(description = "小程序 AppSecret")

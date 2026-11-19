@@ -18,6 +18,10 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
     default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
 
 # MyBatis Plus 配置
 mybatis-plus:
@@ -43,7 +47,7 @@ logging:
 
 # Knife4j 接口文档配置
 knife4j:
-  enable: true
+  enable: ${KNIFE4J_ENABLE:true}
   openapi:
     title: 游戏陪玩/开黑小程序 API 文档
     description: 涵盖客户端、陪玩端与管理员手机端工作台全量接口
@@ -55,6 +59,23 @@ knife4j:
         api-rule: package
         api-rule-resources:
           - com.game.companion.modules
+
+# Web 登录与部署引导配置
+auth:
+  # 是否允许 mock_ 前缀的开发登录；生产环境必须为 false
+  mock-login-enabled: ${AUTH_MOCK_LOGIN_ENABLED:false}
+
+app:
+  # Web 前端地址，用于 H5 支付完成后的回跳
+  web-base-url: ${WEB_BASE_URL:}
+  cors:
+    # 生产请设置为正式 Web 域名，多个用逗号分隔
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
+  bootstrap-admin:
+    # 首次部署时用于创建管理员，创建完成后请从环境变量中移除
+    phone: ${BOOTSTRAP_ADMIN_PHONE:}
+    password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+    nickname: ${BOOTSTRAP_ADMIN_NICKNAME:平台管理员}
 
 # Sa-Token 会话与鉴权配置 (前端通过请求头 satoken 携带凭证)
 sa-token:
@@ -105,7 +126,10 @@ wx:
     template-id:
       new-order: ${WX_MP_TEMPLATE_NEW_ORDER:}
   pay:
-    appId: ${WX_MINIAPP_APPID:}
+    # Web/Native/H5 支付使用的 AppID（服务号或开放平台网站应用），未配置时回退小程序 AppID
+    appId: ${WX_PAY_APP_ID:${wx.miniapp.appid:}}
+    # H5 支付 scene_info.h5_info.app_url 使用的站点地址
+    web-app-url: ${WX_PAY_WEB_APP_URL:${app.web-base-url:}}
     mchId: ${WX_PAY_MCH_ID:}
     apiV3Key: ${WX_PAY_API_V3_KEY:}
     # 商户私钥 / 证书本地路径（生产环境建议改用 wx.pay.key-content 热配置）

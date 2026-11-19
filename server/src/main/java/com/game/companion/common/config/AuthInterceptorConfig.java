@@ -31,6 +31,10 @@ public class AuthInterceptorConfig implements WebMvcConfigurer {
     public static final List<String> PUBLIC_ENDPOINTS = List.of(
             // 登录与开发期工具
             "/user/wx-login",
+            "/user/login",
+            "/user/register",
+            // SSE 流在 Controller 内手动校验 token
+            "/chat/stream",
             // 游戏品类字典
             "/game/**",
             // 陪玩师公开浏览（首页精选列表 / 技能定价）

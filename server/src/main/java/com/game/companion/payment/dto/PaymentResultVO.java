@@ -22,6 +22,15 @@ public class PaymentResultVO {
     @Schema(description = "是否已自动完成支付 (在 mock 模式下为 true)")
     private Boolean isMockPaid;
 
+    @Schema(description = "支付场景: NATIVE / H5 / JSAPI")
+    private String tradeType;
+
+    @Schema(description = "Native 扫码支付二维码内容 (code_url)")
+    private String codeUrl;
+
+    @Schema(description = "H5 支付收银台地址")
+    private String h5Url;
+
     @Schema(description = "支付流水凭证/预支付单号")
     private String prepayId;
 

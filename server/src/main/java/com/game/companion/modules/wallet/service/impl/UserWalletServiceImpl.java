@@ -74,7 +74,8 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
         record.setAmount(withdrawAmount);
         record.setFee(fee);
         record.setActualAmount(actualAmount);
-        record.setChannel(paymentStrategyContext.getService().getChannelType());
+        // Web-only 场景默认走人工打款，管理员在审核弹窗中可改为微信商家转账
+        record.setChannel("manual");
         record.setStatus(0); // 0-待审核
         record.setCreateTime(LocalDateTime.now());
         withdrawRecordMapper.insert(record);
@@ -118,19 +119,38 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
         }
 
         SysUser user = sysUserMapper.selectById(userId);
-        String openid = (user != null && user.getOpenid() != null) ? user.getOpenid() : "mock_openid";
+        String openid = (user != null && user.getOpenid() != null && !user.getOpenid().trim().isEmpty())
+                ? user.getOpenid() : null;
         String realName = (user != null && user.getNickname() != null) ? user.getNickname() : "陪练师";
 
         if (Boolean.TRUE.equals(dto.getIsApproved())) {
-            // ============= 审核通过：调用支付网关打款 (商家转账到零钱 / Mock) =============
-            PaymentService paymentService = paymentStrategyContext.getService();
-            String batchId = paymentService.transferToUser(
-                    record.getWithdrawSn(),
-                    openid,
-                    realName,
-                    record.getActualAmount(),
-                    "开黑陪练平台收益提现结算"
-            );
+            String payoutChannel = (dto.getPayoutChannel() == null || dto.getPayoutChannel().trim().isEmpty())
+                    ? "manual" : dto.getPayoutChannel().trim().toLowerCase();
+            String batchId = null;
+            String flowRemark;
+
+            if ("wechat_transfer".equals(payoutChannel) || "wechat".equals(payoutChannel)) {
+                if (openid == null || "mock_openid".equals(openid)) {
+                    throw new ApiException("该用户没有可用的微信 OpenID，请选择人工打款");
+                }
+                PaymentService paymentService = paymentStrategyContext.getService();
+                batchId = paymentService.transferToUser(
+                        record.getWithdrawSn(),
+                        openid,
+                        realName,
+                        record.getActualAmount(),
+                        "开黑陪练平台收益提现结算"
+                );
+                record.setChannel("wechat_transfer");
+                flowRemark = "提现打款成功到账 (批次号: " + batchId + ")";
+            } else {
+                String manualRemark = (dto.getPayoutRemark() == null || dto.getPayoutRemark().trim().isEmpty())
+                        ? "管理员人工打款" : dto.getPayoutRemark().trim();
+                record.setChannel("manual");
+                record.setPayoutRemark(manualRemark);
+                record.setPayoutVoucher(dto.getPayoutVoucher());
+                flowRemark = "人工打款完成 (备注: " + manualRemark + ")";
+            }
 
             // 扣除冻结资金
             wallet.setFrozenBalance(Math.max(0, wallet.getFrozenBalance() - record.getAmount()));
@@ -154,12 +174,13 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
             flow.setBeforeBalance(wallet.getBalance());
             flow.setAfterBalance(wallet.getBalance());
             flow.setOrderSn(record.getWithdrawSn());
-            flow.setRemark("提现打款成功到账 (批次号: " + batchId + ")");
+            flow.setRemark(flowRemark);
             flow.setCreateTime(LocalDateTime.now());
             walletFlowMapper.insert(flow);
 
-            log.info("【管理员审核提现通过并打款成功】提现单号={}, 用户={}, 金额={}分, 打款批次号={}",
-                    record.getWithdrawSn(), realName, record.getActualAmount(), batchId);
+            log.info("【管理员审核提现通过】提现单号={}, 用户={}, 金额={}分, 通道={}, 打款凭证={}",
+                    record.getWithdrawSn(), realName, record.getActualAmount(), record.getChannel(),
+                    batchId != null ? batchId : dto.getPayoutRemark());
         } else {
             // ============= 审核驳回：解冻资金退还到 balance =============
             if (dto.getRejectReason() == null || dto.getRejectReason().trim().isEmpty()) {
@@ -226,6 +247,9 @@ public class UserWalletServiceImpl extends ServiceImpl<UserWalletMapper, UserWal
                     .amount(r.getAmount())
                     .fee(r.getFee())
                     .actualAmount(r.getActualAmount())
+                    .channel(r.getChannel())
+                    .payoutRemark(r.getPayoutRemark())
+                    .payoutVoucher(r.getPayoutVoucher())
                     .status(r.getStatus())
                     .wechatBatchId(r.getWechatBatchId())
                     .failReason(r.getFailReason())

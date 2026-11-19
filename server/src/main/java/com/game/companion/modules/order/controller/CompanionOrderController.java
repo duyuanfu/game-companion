@@ -28,11 +28,13 @@ public class CompanionOrderController {
     private final DevToolGuard devToolGuard;
 
     @PostMapping("/create")
-    @Operation(summary = "客户创建订单并拉起支付 (支持Mock一键支付/微信)")
-    public CommonResult<PaymentResultVO> createOrder(@Valid @RequestBody CreateOrderDTO dto) {
+    @Operation(summary = "客户创建订单并拉起支付 (支持 Mock / Native / H5)")
+    public CommonResult<PaymentResultVO> createOrder(@Valid @RequestBody CreateOrderDTO dto,
+                                                     jakarta.servlet.http.HttpServletRequest request) {
         // 身份一律取自当前登录会话，杜绝客户端伪造下单人
         Long currentUserId = authGuard.currentUserId();
-        PaymentResultVO paymentResult = companionOrderService.createAndPayOrder(currentUserId, dto);
+        PaymentResultVO paymentResult = companionOrderService.createAndPayOrder(
+                currentUserId, dto, resolveClientIp(request));
         return CommonResult.success(paymentResult);
     }
 
@@ -64,10 +66,27 @@ public class CompanionOrderController {
     }
 
     @PostMapping("/pay/{orderSn}")
-    @Operation(summary = "【发起支付】对待付款订单拉起微信支付 (Mock 模式立即模拟支付成功)")
-    public CommonResult<com.game.companion.payment.dto.PaymentResultVO> payOrder(@PathVariable String orderSn) {
+    @Operation(summary = "【发起支付】对待付款订单拉起微信 Native / H5 支付")
+    public CommonResult<com.game.companion.payment.dto.PaymentResultVO> payOrder(
+            @PathVariable String orderSn,
+            @RequestParam(defaultValue = "native") String payScene,
+            jakarta.servlet.http.HttpServletRequest request) {
         Long clientUserId = authGuard.currentUserId();
-        return CommonResult.success(companionOrderService.payOrder(clientUserId, orderSn));
+        return CommonResult.success(companionOrderService.payOrder(
+                clientUserId, orderSn, payScene, resolveClientIp(request)));
+    }
+
+    private String resolveClientIp(jakarta.servlet.http.HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.trim().isEmpty()) {
+            int comma = forwarded.indexOf(',');
+            return (comma > 0 ? forwarded.substring(0, comma) : forwarded).trim();
+        }
+        String realIp = request.getHeader("X-Real-IP");
+        if (realIp != null && !realIp.trim().isEmpty()) {
+            return realIp.trim();
+        }
+        return request.getRemoteAddr();
     }
 
     @PostMapping("/mock-pay/{orderSn}")

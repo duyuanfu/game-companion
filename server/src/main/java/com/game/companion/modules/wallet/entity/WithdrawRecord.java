@@ -34,8 +34,14 @@ public class WithdrawRecord implements Serializable {
     @Schema(description = "实际到账金额(分)")
     private Integer actualAmount;
 
-    @Schema(description = "提现通道: mock / wechat_transfer")
+    @Schema(description = "打款通道: manual / wechat_transfer / mock")
     private String channel;
+
+    @Schema(description = "人工打款备注/流水号")
+    private String payoutRemark;
+
+    @Schema(description = "人工打款凭证 URL")
+    private String payoutVoucher;
 
     @Schema(description = "提现状态: 0-待审核 1-打款中 2-提现成功 3-提现失败/已驳回")
     private Integer status;

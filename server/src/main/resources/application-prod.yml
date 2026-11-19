@@ -1,0 +1,46 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
+      timeout: 3000ms
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+server:
+  port: ${SERVER_PORT:8088}
+
+platform:
+  # 生产必须关闭开发工具
+  dev-tools-enabled: false
+  # 生产默认走真实微信支付；未配置商户参数时支付会明确失败，不会假成功
+  payment-mode: ${PLATFORM_PAYMENT_MODE:wechat}
+
+auth:
+  mock-login-enabled: false
+
+app:
+  web-base-url: ${WEB_BASE_URL:https://你的Web域名}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://你的Web域名}
+  bootstrap-admin:
+    phone: ${BOOTSTRAP_ADMIN_PHONE:}
+    password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+    nickname: ${BOOTSTRAP_ADMIN_NICKNAME:平台管理员}
+
+knife4j:
+  enable: ${KNIFE4J_ENABLE:false}
+
+logging:
+  level:
+    root: INFO
+    com.game.companion: INFO

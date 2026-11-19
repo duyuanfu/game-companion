@@ -5,6 +5,7 @@ import cn.dev33.satoken.exception.NotRoleException;
 import com.game.companion.common.api.CommonResult;
 import com.game.companion.common.api.ResultCode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
@@ -64,6 +65,12 @@ public class GlobalExceptionHandler {
     public CommonResult<Object> handleNoResourceFoundException(org.springframework.web.servlet.resource.NoResourceFoundException e) {
         log.warn("接口或资源未找到 (404): {}", e.getResourcePath());
         return CommonResult.failed("未找到请求的接口或资源路径: " + e.getResourcePath());
+    }
+
+    @ExceptionHandler(value = DuplicateKeyException.class)
+    public CommonResult<Object> handleDuplicateKeyException(DuplicateKeyException e) {
+        log.warn("【唯一键冲突】{}", e.getMessage());
+        return CommonResult.failed("数据已存在或正在被处理，请勿重复提交");
     }
 
     @ExceptionHandler(value = Exception.class)

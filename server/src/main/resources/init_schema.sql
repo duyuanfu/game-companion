@@ -25,7 +25,8 @@ CREATE TABLE `sys_user` (
   `mp_openid` VARCHAR(64) DEFAULT NULL COMMENT '微信服务号 OpenID (用于下发公众号模板消息通知)',
   `nickname` VARCHAR(64) NOT NULL DEFAULT '微信用户' COMMENT '用户昵称',
   `avatar_url` VARCHAR(512) DEFAULT NULL COMMENT '头像地址',
-  `phone` VARCHAR(20) DEFAULT NULL COMMENT '手机号码 (用于接单短信兜底提醒)',
+  `phone` VARCHAR(20) DEFAULT NULL COMMENT '手机号码 (用于接单短信兜底提醒 / Web 登录账号)',
+  `password_hash` VARCHAR(100) DEFAULT NULL COMMENT 'Web 登录密码 BCrypt 哈希',
   `gender` TINYINT DEFAULT 0 COMMENT '性别：0-未知 1-男 2-女',
   `role` TINYINT NOT NULL DEFAULT 1 COMMENT '角色：1-普通客户 2-陪玩师 9-平台管理员',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '账号状态：0-已封禁 1-正常',
@@ -35,7 +36,7 @@ CREATE TABLE `sys_user` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_openid` (`openid`),
   UNIQUE KEY `uk_unionid` (`unionid`),
-  KEY `idx_phone` (`phone`)
+  UNIQUE KEY `uk_phone` (`phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户基础表';
 
 -- --------------------------------------------------------
@@ -49,7 +50,8 @@ CREATE TABLE `game_category` (
   `sort` INT DEFAULT 0 COMMENT '排序权重 (数字越大越靠前)',
   `is_active` TINYINT NOT NULL DEFAULT 1 COMMENT '是否启用：0-禁用 1-启用',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='游戏品类字典表';
 
 -- --------------------------------------------------------
@@ -94,7 +96,9 @@ CREATE TABLE `companion_skill` (
   `unit` VARCHAR(16) NOT NULL DEFAULT '小时' COMMENT '计价单位：小时 / 局',
   `status` TINYINT NOT NULL DEFAULT 1 COMMENT '上架状态：0-下架 1-上架',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_game` (`user_id`, `game_name`),
   KEY `idx_companion_id` (`companion_id`),
   KEY `idx_game_id` (`game_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='陪玩师技能与定价表';
@@ -218,7 +222,9 @@ CREATE TABLE `withdraw_record` (
   `amount` INT NOT NULL COMMENT '申请提现金额 (单位: 分)',
   `fee` INT NOT NULL DEFAULT 0 COMMENT '提现手续费 (单位: 分)',
   `actual_amount` INT NOT NULL COMMENT '实际到账金额 (单位: 分)',
-  `channel` VARCHAR(16) NOT NULL DEFAULT 'mock' COMMENT '提现渠道: mock / wechat_transfer',
+  `channel` VARCHAR(16) NOT NULL DEFAULT 'manual' COMMENT '打款渠道: manual / wechat_transfer / mock',
+  `payout_remark` VARCHAR(255) DEFAULT NULL COMMENT '人工打款备注/流水号',
+  `payout_voucher` VARCHAR(512) DEFAULT NULL COMMENT '人工打款凭证 URL',
   `status` TINYINT NOT NULL DEFAULT 0 COMMENT '提现状态：0-申请中/待审核 1-打款中 2-提现成功 3-提现失败/已驳回',
   `wechat_batch_id` VARCHAR(64) DEFAULT NULL COMMENT '微信商家转账批次单号',
   `fail_reason` VARCHAR(255) DEFAULT NULL COMMENT '失败或驳回原因',
@@ -262,14 +268,47 @@ DROP TABLE IF EXISTS `chat_message`;
 CREATE TABLE `chat_message` (
   `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `order_sn` VARCHAR(32) NOT NULL COMMENT '关联订单号',
-  `sender_id` BIGINT NOT NULL COMMENT '发送人ID',
+  `sender_id` BIGINT NOT NULL COMMENT '发送人ID (系统消息为0)',
   `sender_name` VARCHAR(64) DEFAULT NULL COMMENT '发送人昵称',
   `sender_avatar` VARCHAR(512) DEFAULT NULL COMMENT '发送人头像',
+  `message_type` TINYINT NOT NULL DEFAULT 0 COMMENT '消息类型：0-用户消息 1-系统消息',
   `content` TEXT NOT NULL COMMENT '消息正文',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发送时间',
   PRIMARY KEY (`id`),
-  KEY `idx_order_sn` (`order_sn`)
+  KEY `idx_order_sn` (`order_sn`),
+  KEY `idx_room_id` (`order_sn`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='开黑房间即时聊天记录表';
+
+DROP TABLE IF EXISTS `chat_read_state`;
+CREATE TABLE `chat_read_state` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
+  `room_sn` VARCHAR(32) NOT NULL COMMENT '聊天室标识：订单号或 CONSULT_{min}_{max}',
+  `last_read_time` DATETIME NOT NULL COMMENT '最后一次已读时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_room` (`user_id`, `room_sn`),
+  KEY `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天室已读状态表';
+
+DROP TABLE IF EXISTS `chat_room`;
+CREATE TABLE `chat_room` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `room_sn` VARCHAR(32) NOT NULL COMMENT '聊天室标识：订单号或 CONSULT_{min}_{max}',
+  `room_type` TINYINT NOT NULL DEFAULT 1 COMMENT '房间类型：1-订单 2-咨询',
+  `order_sn` VARCHAR(32) DEFAULT NULL COMMENT '关联订单号（仅订单房间）',
+  `user_a_id` BIGINT DEFAULT NULL COMMENT '成员A：订单为客户，咨询为较小用户ID',
+  `user_b_id` BIGINT DEFAULT NULL COMMENT '成员B：订单为陪练，咨询为较大用户ID',
+  `last_message_id` BIGINT DEFAULT NULL COMMENT '最后一条消息ID',
+  `last_message_time` DATETIME DEFAULT NULL COMMENT '最后一条消息时间',
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_room_sn` (`room_sn`),
+  KEY `idx_user_a` (`user_a_id`),
+  KEY `idx_user_b` (`user_b_id`),
+  KEY `idx_last_time` (`last_message_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天室摘要表（避免会话列表全表扫描）';
 
 -- --------------------------------------------------------
 -- 12. 平台系统动态配置表 (用于管理员在线修改微信支付与抽成参数)
@@ -306,7 +345,7 @@ CREATE TABLE `pay_flow` (
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_pay_sn` (`pay_sn`),
-  KEY `idx_order_sn` (`order_sn`),
+  UNIQUE KEY `uk_pay_order_sn` (`order_sn`),
   KEY `idx_transaction_id` (`transaction_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='支付流水事实表';
 

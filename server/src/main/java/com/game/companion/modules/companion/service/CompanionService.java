@@ -1,7 +1,9 @@
 package com.game.companion.modules.companion.service;
 
+import com.game.companion.modules.companion.dto.CompanionSkillDTO;
 import com.game.companion.modules.companion.entity.CompanionSkill;
 import com.game.companion.modules.companion.vo.CompanionItemVO;
+import com.game.companion.modules.companion.vo.CompanionSkillVO;
 import com.game.companion.modules.companion.vo.CompanionStatusVO;
 import com.game.companion.modules.companion.vo.CompanionWorkbenchVO;
 
@@ -20,7 +22,17 @@ public interface CompanionService {
     /**
      * 获取陪玩师支持的所有游戏服务项目与定价列表 (含游戏图标)
      */
-    java.util.List<com.game.companion.modules.companion.vo.CompanionSkillVO> getCompanionSkillViews(Long companionUserId);
+    List<CompanionSkillVO> getCompanionSkillViews(Long companionUserId);
+
+    /**
+     * 获取当前陪练师自己的技能列表（包含已下架，用于编辑）
+     */
+    List<CompanionSkillVO> getMySkillViews(Long userId);
+
+    /**
+     * 新增或编辑当前陪练师的技能与价格
+     */
+    CompanionSkillVO saveMySkill(Long userId, Long skillId, CompanionSkillDTO dto);
 
     /**
      * 获取陪玩师支持的所有游戏服务项目与定价列表

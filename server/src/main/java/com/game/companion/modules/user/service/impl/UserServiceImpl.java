@@ -5,11 +5,16 @@ import cn.binarywang.wx.miniapp.bean.WxMaJscode2SessionResult;
 import cn.binarywang.wx.miniapp.bean.WxMaPhoneNumberInfo;
 import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.crypto.digest.BCrypt;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
+import com.game.companion.common.security.LoginRateLimiter;
 import com.game.companion.modules.user.dto.BindPhoneDTO;
+import com.game.companion.modules.user.dto.ChangePasswordDTO;
+import com.game.companion.modules.user.dto.PasswordLoginDTO;
+import com.game.companion.modules.user.dto.RegisterDTO;
 import com.game.companion.modules.user.dto.UpdateProfileDTO;
 import com.game.companion.modules.user.dto.WxLoginDTO;
 import com.game.companion.modules.user.entity.SysUser;
@@ -20,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,13 +40,131 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
     private WxMaService wxMaService;
 
     private final com.game.companion.modules.wallet.mapper.UserWalletMapper userWalletMapper;
+    private final LoginRateLimiter loginRateLimiter;
 
     @Value("${wx.miniapp.appid:}")
     private String wxAppId;
 
+    /**
+     * 是否允许 mock_ 前缀的开发登录。生产环境必须为 false。
+     */
+    @Value("${auth.mock-login-enabled:false}")
+    private boolean mockLoginEnabled;
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public UserLoginVO passwordLogin(PasswordLoginDTO dto) {
+        String phone = dto.getPhone().trim();
+        loginRateLimiter.ensureLoginAllowed(phone);
+        SysUser user = getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getPhone, phone), false);
+        if (user == null || user.getPasswordHash() == null || user.getPasswordHash().isEmpty()
+                || !BCrypt.checkpw(dto.getPassword(), user.getPasswordHash())) {
+            loginRateLimiter.recordLoginFailure(phone);
+            throw new ApiException("手机号或密码错误");
+        }
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            throw new ApiException("账号已被禁用，请联系平台管理员");
+        }
+
+        loginRateLimiter.clearLoginFailures(phone);
+        StpUtil.login(user.getId());
+        log.info("【Web 密码登录】用户ID={}, 手机号={}, 角色={}", user.getId(), maskPhone(phone), user.getRole());
+        return buildLoginVO(user);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public UserLoginVO register(RegisterDTO dto) {
+        loginRateLimiter.ensureRegisterAllowed();
+        String phone = dto.getPhone().trim();
+        long exists = count(new LambdaQueryWrapper<SysUser>().eq(SysUser::getPhone, phone));
+        if (exists > 0) {
+            throw new ApiException("该手机号已注册，请直接登录或联系管理员重置密码");
+        }
+
+        String nickname = dto.getNickname() == null ? "" : dto.getNickname().trim();
+        if (nickname.isEmpty()) {
+            nickname = "玩家_" + RandomUtil.randomNumbers(4);
+        }
+
+        SysUser user = new SysUser();
+        user.setPhone(phone);
+        user.setPasswordHash(BCrypt.hashpw(dto.getPassword(), BCrypt.gensalt()));
+        user.setNickname(nickname);
+        user.setAvatarUrl("https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80");
+        user.setGender(0);
+        user.setRole(RoleEnum.CLIENT.getCode());
+        user.setStatus(1);
+        user.setDeleted(0);
+        user.setCreateTime(LocalDateTime.now());
+        user.setUpdateTime(LocalDateTime.now());
+        try {
+            save(user);
+        } catch (DuplicateKeyException e) {
+            throw new ApiException("该手机号已注册，请直接登录或联系管理员重置密码");
+        }
+        createWallet(user.getId());
+
+        StpUtil.login(user.getId());
+        log.info("【Web 手机号注册成功】用户ID={}, 手机号={}", user.getId(), maskPhone(phone));
+        return buildLoginVO(user);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void changePassword(Long userId, ChangePasswordDTO dto) {
+        SysUser user = getById(userId);
+        if (user == null) {
+            throw new ApiException("用户不存在，请重新登录");
+        }
+        if (user.getPasswordHash() == null || user.getPasswordHash().isEmpty()
+                || !BCrypt.checkpw(dto.getOldPassword(), user.getPasswordHash())) {
+            throw new ApiException("原密码不正确");
+        }
+        user.setPasswordHash(BCrypt.hashpw(dto.getNewPassword(), BCrypt.gensalt()));
+        user.setUpdateTime(LocalDateTime.now());
+        updateById(user);
+        log.info("【Web 修改密码成功】用户ID={}", userId);
+    }
+
+    private String maskPhone(String phone) {
+        if (phone == null || phone.length() < 7) {
+            return "***";
+        }
+        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
+    }
+
+    private UserLoginVO buildLoginVO(SysUser user) {
+        return UserLoginVO.builder()
+                .userId(user.getId())
+                .openid(user.getOpenid())
+                .nickname(user.getNickname())
+                .avatarUrl(user.getAvatarUrl())
+                .phone(user.getPhone())
+                .role(user.getRole())
+                .token(StpUtil.getTokenValue())
+                .build();
+    }
+
+    private void createWallet(Long userId) {
+        com.game.companion.modules.wallet.entity.UserWallet wallet =
+                new com.game.companion.modules.wallet.entity.UserWallet();
+        wallet.setUserId(userId);
+        wallet.setBalance(0);
+        wallet.setFrozenBalance(0);
+        wallet.setTotalIncome(0);
+        wallet.setVersion(0);
+        wallet.setCreateTime(LocalDateTime.now());
+        wallet.setUpdateTime(LocalDateTime.now());
+        userWalletMapper.insert(wallet);
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public UserLoginVO wxSilentLogin(WxLoginDTO dto) {
+        if (dto.getCode() != null && dto.getCode().startsWith("mock_") && !mockLoginEnabled) {
+            throw new ApiException("开发模拟登录已关闭，请使用手机号登录");
+        }
         String openid = null;
         String unionid = null;
         boolean isRealWxAuth = false;
@@ -57,12 +181,15 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
                 isRealWxAuth = true;
                 log.info("✅ 微信官方 API 成功换取真实用户 OpenID: {}", openid);
             } catch (Exception e) {
-                log.error("微信官方 code 换取 session 失败，启用开发模式: ", e);
+                log.error("微信官方 code 换取 session 失败: ", e);
             }
         }
 
-        // 2. 开发降级 OpenID (仅在微信官方无法换取时按 code 进行区分)
+        // 2. 开发降级 OpenID：生产环境禁止无微信凭证时静默建档
         if (openid == null) {
+            if (!mockLoginEnabled) {
+                throw new ApiException("微信登录失败：无法换取 OpenID，请稍后重试");
+            }
             openid = resolveDevOpenId(dto.getCode(), dto.getDeviceType());
         }
 
@@ -152,7 +279,7 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
         // 1. 优先使用前端手动填入的真实手机号 (彻底避免无权限时向微信发送空 code 报 40029)
         if (dto.getPhone() != null && !dto.getPhone().trim().isEmpty()) {
             phoneNumber = dto.getPhone().trim();
-            log.info("【手机号绑定】直接采用用户填写的真实手机号: {}", phoneNumber);
+            log.info("【手机号绑定】直接采用用户填写的真实手机号: {}", maskPhone(phoneNumber));
         } else {
             // 2. 仅在未传手机号且 code 有效非空时，才请求微信官方接口解密
             boolean hasValidWxConfig = wxMaService != null && wxAppId != null 
@@ -175,12 +302,24 @@ public class UserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impleme
             phoneNumber = "13800" + RandomUtil.randomNumbers(6);
         }
 
+        long boundByOthers = count(new LambdaQueryWrapper<SysUser>()
+                .eq(SysUser::getPhone, phoneNumber)
+                .ne(SysUser::getId, userId));
+        if (boundByOthers > 0) {
+            throw new ApiException("该手机号已被其他账号绑定");
+        }
+
         user.setPhone(phoneNumber);
         user.setUpdateTime(LocalDateTime.now());
-        boolean updated = updateById(user);
+        boolean updated;
+        try {
+            updated = updateById(user);
+        } catch (DuplicateKeyException e) {
+            throw new ApiException("该手机号已被其他账号绑定");
+        }
         
         log.info("========== [手机号成功写入 MySQL 数据库] ==========");
-        log.info("用户ID: {}, 绑定手机号: {}, 更新结果: {}", user.getId(), phoneNumber, updated);
+        log.info("用户ID: {}, 绑定手机号: {}, 更新结果: {}", user.getId(), maskPhone(phoneNumber), updated);
         log.info("==================================================");
         
         return phoneNumber;

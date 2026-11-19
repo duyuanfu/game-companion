@@ -62,6 +62,30 @@ public class CompanionController {
         return CommonResult.success(isOnline ? "已切换为接单中" : "已切换为休息中");
     }
 
+    @GetMapping("/my-skills")
+    @Operation(summary = "【陪练师】获取自己的全部技能（含已下架）")
+    public CommonResult<List<com.game.companion.modules.companion.vo.CompanionSkillVO>> getMySkills() {
+        Long userId = authGuard.currentUserId();
+        return CommonResult.success(companionService.getMySkillViews(userId));
+    }
+
+    @PostMapping("/skills")
+    @Operation(summary = "【陪练师】新增游戏技能与定价")
+    public CommonResult<com.game.companion.modules.companion.vo.CompanionSkillVO> createSkill(
+            @jakarta.validation.Valid @RequestBody com.game.companion.modules.companion.dto.CompanionSkillDTO dto) {
+        Long userId = authGuard.currentUserId();
+        return CommonResult.success(companionService.saveMySkill(userId, null, dto), "技能已添加");
+    }
+
+    @PutMapping("/skills/{id}")
+    @Operation(summary = "【陪练师】编辑自己的游戏技能、价格或上下架状态")
+    public CommonResult<com.game.companion.modules.companion.vo.CompanionSkillVO> updateSkill(
+            @PathVariable Long id,
+            @jakarta.validation.Valid @RequestBody com.game.companion.modules.companion.dto.CompanionSkillDTO dto) {
+        Long userId = authGuard.currentUserId();
+        return CommonResult.success(companionService.saveMySkill(userId, id, dto), "技能已更新");
+    }
+
     @PostMapping("/apply")
     @Operation(summary = "【申请入驻】客户申请成为陪练师 (支持申报多个游戏与差异化定价)")
     public CommonResult<String> applyCompanion(@jakarta.validation.Valid @RequestBody com.game.companion.modules.companion.dto.ApplyCompanionDTO dto) {

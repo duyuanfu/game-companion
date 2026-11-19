@@ -29,3 +29,14 @@ platform:
   dev-tools-enabled: true
   # 本地默认使用 mock 支付（免商户号联调）
   payment-mode: mock
+
+auth:
+  # 本地保留 mock_ 快速登录，方便前端调试
+  mock-login-enabled: true
+
+app:
+  web-base-url: http://localhost:5174
+  # 启动时自动补齐三个演示账号（仅开发环境生效）
+  # 客户 13900000101 / Demo123456；陪练 13900000102 / Demo123456；管理员 13900000109 / Admin123456
+  demo-accounts:
+    enabled: true

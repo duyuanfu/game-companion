@@ -18,6 +18,15 @@ public class CreatePaymentParam {
     @Schema(description = "商品/服务简要描述")
     private String description;
 
-    @Schema(description = "客户微信 OpenId")
+    @Schema(description = "客户微信 OpenId (仅 JSAPI 需要)")
     private String clientOpenid;
+
+    @Schema(description = "支付场景: native / h5 / jsapi")
+    private String payScene;
+
+    @Schema(description = "客户端 IP (H5 支付必填)")
+    private String clientIp;
+
+    @Schema(description = "H5 支付完成后的回跳地址")
+    private String returnUrl;
 }

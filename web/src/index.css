@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 150 20% 98%;
+    --foreground: 162 24% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 162 24% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 162 24% 9%;
+    --primary: 162 84% 27%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 156 36% 94%;
+    --secondary-foreground: 162 30% 16%;
+    --muted: 156 18% 95%;
+    --muted-foreground: 160 8% 42%;
+    --accent: 156 30% 94%;
+    --accent-foreground: 162 30% 16%;
+    --destructive: 0 72% 47%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 156 14% 90%;
+    --input: 156 14% 88%;
+    --ring: 162 84% 27%;
+    --radius: 0.875rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body,
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      "Inter",
+      "PingFang SC",
+      "Microsoft YaHei",
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+
+  /* 避免移动端横向溢出，clip 不会破坏 sticky 定位 */
+  @supports (overflow-x: clip) {
+    body {
+      overflow-x: clip;
+    }
+  }
+
+  ::selection {
+    @apply bg-primary/20;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* iOS 安全区，底部导航与吸底操作栏使用 */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .pb-safe-2-5 {
+    padding-bottom: calc(0.625rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .pb-safe-3 {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .pb-safe-4 {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}

@@ -32,4 +32,7 @@ public class CreateOrderDTO {
 
     @Schema(description = "需求备注/段位要求")
     private String clientRemark;
+
+    @Schema(description = "支付场景: native(PC扫码) / h5(手机非微信浏览器) / jsapi(微信内)")
+    private String payScene;
 }

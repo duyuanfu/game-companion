@@ -3,6 +3,7 @@ package com.game.companion.modules.companion.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.game.companion.common.enums.RoleEnum;
 import com.game.companion.common.exception.ApiException;
+import com.game.companion.modules.companion.dto.CompanionSkillDTO;
 import com.game.companion.modules.companion.entity.CompanionProfile;
 import com.game.companion.modules.companion.entity.CompanionSkill;
 import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
@@ -21,7 +22,9 @@ import com.game.companion.modules.wallet.entity.UserWallet;
 import com.game.companion.modules.wallet.mapper.UserWalletMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -159,7 +162,86 @@ public class CompanionServiceImpl implements CompanionService {
 
     @Override
     public List<CompanionSkillVO> getCompanionSkillViews(Long companionUserId) {
-        List<CompanionSkill> skills = getCompanionSkills(companionUserId);
+        return toSkillViews(getCompanionSkills(companionUserId));
+    }
+
+    @Override
+    public List<CompanionSkillVO> getMySkillViews(Long userId) {
+        List<CompanionSkill> skills = companionSkillMapper.selectList(
+                new LambdaQueryWrapper<CompanionSkill>()
+                        .eq(CompanionSkill::getUserId, userId)
+                        .orderByDesc(CompanionSkill::getStatus)
+                        .orderByAsc(CompanionSkill::getPrice)
+        );
+        return toSkillViews(skills);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CompanionSkillVO saveMySkill(Long userId, Long skillId, CompanionSkillDTO dto) {
+        CompanionProfile profile = companionProfileMapper.selectOne(
+                new LambdaQueryWrapper<CompanionProfile>().eq(CompanionProfile::getUserId, userId)
+        );
+        if (profile == null) {
+            throw new ApiException("请先提交入驻申请，再维护游戏技能");
+        }
+
+        CompanionSkill skill;
+        if (skillId == null) {
+            skill = new CompanionSkill();
+            skill.setUserId(userId);
+            skill.setCompanionId(profile.getId());
+            skill.setCreateTime(LocalDateTime.now());
+            skill.setStatus(1);
+        } else {
+            skill = companionSkillMapper.selectById(skillId);
+            if (skill == null || !userId.equals(skill.getUserId())) {
+                throw new ApiException("技能不存在或无权修改");
+            }
+        }
+
+        String previousGameName = skill.getGameName();
+        String previousRankName = skill.getRankName();
+
+        GameCategory category = gameCategoryMapper.selectOne(
+                new LambdaQueryWrapper<GameCategory>().eq(GameCategory::getName, dto.getGameName().trim())
+        );
+        skill.setGameId(category != null ? category.getId() : 0L);
+        skill.setGameName(dto.getGameName().trim());
+        skill.setRankName(dto.getRankName().trim());
+        skill.setPrice(dto.getPrice());
+        skill.setUnit(dto.getUnit() == null || dto.getUnit().isBlank() ? "小时" : dto.getUnit().trim());
+        if (dto.getRankImg() != null) {
+            skill.setRankImg(dto.getRankImg());
+        }
+        if (dto.getStatus() != null) {
+            skill.setStatus(dto.getStatus() == 0 ? 0 : 1);
+        }
+
+        // 价格、上下架可自助修改；新增技能或修改游戏/段位属于资质变更，重新进入审核
+        boolean materialChange = skillId == null
+                || !dto.getGameName().trim().equals(previousGameName)
+                || !dto.getRankName().trim().equals(previousRankName);
+        if (materialChange && profile.getAuditStatus() != null && profile.getAuditStatus() == 1) {
+            profile.setAuditStatus(0);
+            profile.setRejectReason(null);
+            profile.setUpdateTime(LocalDateTime.now());
+            companionProfileMapper.updateById(profile);
+        }
+
+        try {
+            if (skill.getId() == null) {
+                companionSkillMapper.insert(skill);
+            } else {
+                companionSkillMapper.updateById(skill);
+            }
+        } catch (DuplicateKeyException e) {
+            throw new ApiException("同一游戏已存在技能，请直接编辑原技能");
+        }
+        return toSkillViews(List.of(skill)).get(0);
+    }
+
+    private List<CompanionSkillVO> toSkillViews(List<CompanionSkill> skills) {
         List<CompanionSkillVO> result = new ArrayList<>();
         if (skills == null || skills.isEmpty()) {
             return result;

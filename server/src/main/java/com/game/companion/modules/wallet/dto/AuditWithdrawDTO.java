@@ -18,4 +18,13 @@ public class AuditWithdrawDTO {
 
     @Schema(description = "驳回理由")
     private String rejectReason;
+
+    @Schema(description = "打款通道: manual(人工打款) / wechat_transfer(微信商家转账)，默认 manual")
+    private String payoutChannel;
+
+    @Schema(description = "人工打款备注/银行流水号/支付宝流水号")
+    private String payoutRemark;
+
+    @Schema(description = "人工打款凭证 URL")
+    private String payoutVoucher;
 }

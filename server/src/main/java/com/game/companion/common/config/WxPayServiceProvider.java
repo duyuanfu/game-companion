@@ -25,7 +25,7 @@ public class WxPayServiceProvider {
 
     private final PlatformConfigService platformConfigService;
 
-    @Value("${wx.miniapp.appid:}")
+    @Value("${wx.pay.appId:}")
     private String defaultAppId;
 
     @Value("${wx.pay.mchId:}")
@@ -50,7 +50,7 @@ public class WxPayServiceProvider {
      * 获取当前生效的微信支付服务实例；商户参数不完整时返回 null（由调用方给出明确报错）。
      */
     public WxPayService getWxPayService() {
-        String appId = resolve("wx.miniapp.appid", defaultAppId);
+        String appId = resolve("wx.pay.appid", defaultAppId);
         String mchId = resolve("wx.pay.mchid", defaultMchId);
         String apiV3Key = resolve("wx.pay.apiv3key", defaultApiV3Key);
         String privateKeyContent = resolve("wx.pay.key-content", "");

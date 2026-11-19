@@ -22,8 +22,11 @@ public class ChatMessage implements Serializable {
     @Schema(description = "关联业务订单号")
     private String orderSn;
 
-    @Schema(description = "发送人用户ID")
+    @Schema(description = "发送人用户ID (系统消息为0)")
     private Long senderId;
+
+    @Schema(description = "消息类型：0-用户消息 1-系统消息")
+    private Integer messageType;
 
     @Schema(description = "发送人昵称")
     private String senderName;

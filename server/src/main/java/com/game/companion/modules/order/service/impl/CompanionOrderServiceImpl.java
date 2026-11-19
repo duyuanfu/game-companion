@@ -4,6 +4,7 @@ import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.RandomUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.game.companion.common.enums.OrderStatusEnum;
@@ -12,6 +13,8 @@ import com.game.companion.common.exception.ApiException;
 import com.game.companion.modules.admin.service.PlatformConfigService;
 import com.game.companion.modules.chat.entity.ChatMessage;
 import com.game.companion.modules.chat.mapper.ChatMessageMapper;
+import com.game.companion.modules.chat.service.ChatEventService;
+import com.game.companion.modules.chat.service.ChatRoomService;
 import com.game.companion.modules.companion.entity.CompanionProfile;
 import com.game.companion.modules.companion.entity.CompanionSkill;
 import com.game.companion.modules.companion.mapper.CompanionProfileMapper;
@@ -67,6 +70,8 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     private final UserWalletMapper userWalletMapper;
     private final WalletFlowMapper walletFlowMapper;
     private final ChatMessageMapper chatMessageMapper;
+    private final ChatRoomService chatRoomService;
+    private final ChatEventService chatEventService;
     private final PayFlowMapper payFlowMapper;
     private final OrderSettlementMapper orderSettlementMapper;
     private final PlatformConfigService platformConfigService;
@@ -107,9 +112,22 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     @Value("${platform.order-service-timeout-minutes:60}")
     private int serviceTimeoutMinutes;
 
+    @Value("${app.web-base-url:}")
+    private String webBaseUrl;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto) {
+        return doCreateAndPay(clientUserId, dto, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public PaymentResultVO createAndPayOrder(Long clientUserId, CreateOrderDTO dto, String clientIp) {
+        return doCreateAndPay(clientUserId, dto, clientIp);
+    }
+
+    private PaymentResultVO doCreateAndPay(Long clientUserId, CreateOrderDTO dto, String clientIp) {
         if (clientUserId == null || clientUserId <= 0) {
             throw new ApiException("操作被拒绝：请先登录后再下单");
         }
@@ -158,16 +176,31 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
 
         save(order);
 
+        // 3.1 复用咨询会话：把客户与该陪练的咨询房间消息迁移到本次订单房间，
+        // 这样从“先聊两句”进入下单后，订单聊天室能直接看到之前的对话。
+        if (dto.getCompanionUserId() != null) {
+            String consultRoom = "CONSULT_" + Math.min(clientUserId, dto.getCompanionUserId())
+                    + "_" + Math.max(clientUserId, dto.getCompanionUserId());
+            chatMessageMapper.update(null,
+                    new LambdaUpdateWrapper<ChatMessage>()
+                            .eq(ChatMessage::getOrderSn, consultRoom)
+                            .set(ChatMessage::getOrderSn, orderSn));
+            chatRoomService.migrateConsultToOrder(consultRoom, orderSn, clientUserId, dto.getCompanionUserId());
+        }
+
         // 4. 调用抽象支付网关 (真实模式下使用下单客户本人的真实 OpenID)
         PaymentService paymentService = paymentStrategyContext.getService();
         SysUser client = sysUserMapper.selectById(clientUserId);
         String clientOpenid = (client != null && client.getOpenid() != null && !client.getOpenid().isEmpty())
-                ? client.getOpenid() : "mock_openid";
+                ? client.getOpenid() : null;
         CreatePaymentParam paymentParam = CreatePaymentParam.builder()
                 .orderSn(orderSn)
                 .amount(totalAmount)
                 .description("游戏开黑服务 - " + order.getGameName())
                 .clientOpenid(clientOpenid)
+                .payScene(resolvePayScene(dto.getPayScene()))
+                .clientIp(clientIp)
+                .returnUrl(buildReturnUrl(orderSn))
                 .build();
 
         PaymentResultVO paymentResult = paymentService.createPayment(paymentParam);
@@ -189,6 +222,16 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
     @Override
     @Transactional(rollbackFor = Exception.class)
     public PaymentResultVO payOrder(Long clientUserId, String orderSn) {
+        return doPayOrder(clientUserId, orderSn, "native", null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public PaymentResultVO payOrder(Long clientUserId, String orderSn, String payScene, String clientIp) {
+        return doPayOrder(clientUserId, orderSn, payScene, clientIp);
+    }
+
+    private PaymentResultVO doPayOrder(Long clientUserId, String orderSn, String payScene, String clientIp) {
         CompanionOrder order = getOne(new LambdaQueryWrapper<CompanionOrder>().eq(CompanionOrder::getOrderSn, orderSn));
         if (order == null) {
             throw new ApiException("订单不存在: " + orderSn);
@@ -203,13 +246,16 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         PaymentService paymentService = paymentStrategyContext.getService();
         SysUser client = sysUserMapper.selectById(clientUserId);
         String clientOpenid = (client != null && client.getOpenid() != null && !client.getOpenid().isEmpty())
-                ? client.getOpenid() : "mock_openid";
+                ? client.getOpenid() : null;
 
         CreatePaymentParam param = CreatePaymentParam.builder()
                 .orderSn(orderSn)
                 .amount(order.getTotalAmount())
                 .description("游戏开黑服务 - " + order.getGameName())
                 .clientOpenid(clientOpenid)
+                .payScene(resolvePayScene(payScene))
+                .clientIp(clientIp)
+                .returnUrl(buildReturnUrl(orderSn))
                 .build();
 
         PaymentResultVO result = paymentService.createPayment(param);
@@ -217,6 +263,71 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             mockPaySuccess(orderSn);
         }
         return result;
+    }
+
+    private void insertOrderSystemMessage(CompanionOrder order) {
+        SysUser client = sysUserMapper.selectById(order.getClientUserId());
+        String nickname = client != null && client.getNickname() != null ? client.getNickname() : "玩家";
+        String amount = new java.math.BigDecimal(String.valueOf(order.getTotalAmount() == null ? 0 : order.getTotalAmount()))
+                .movePointLeft(2)
+                .toPlainString();
+
+        StringBuilder content = new StringBuilder();
+        content.append("玩家 ").append(nickname).append(" 已下单");
+        if (order.getGameName() != null && !order.getGameName().isBlank()) {
+            content.append("：").append(order.getGameName());
+        }
+        if (order.getGameServer() != null && !order.getGameServer().isBlank()) {
+            content.append(" · ").append(order.getGameServer());
+        }
+        if (order.getGameAccount() != null && !order.getGameAccount().isBlank()) {
+            content.append(" · 账号 ").append(order.getGameAccount());
+        }
+        content.append("，金额 ").append(amount).append(" 元");
+        if (order.getClientRemark() != null && !order.getClientRemark().isBlank()) {
+            content.append("。备注：").append(order.getClientRemark());
+        }
+
+        ChatMessage message = new ChatMessage();
+        message.setOrderSn(order.getOrderSn());
+        message.setSenderId(0L);
+        message.setMessageType(1);
+        message.setSenderName("系统消息");
+        message.setContent(content.toString());
+        message.setCreateTime(LocalDateTime.now());
+        chatMessageMapper.insert(message);
+        chatRoomService.touch(order.getOrderSn(), 0L, message);
+        publishChatMessage(order.getOrderSn(), message);
+    }
+
+    private void publishChatMessage(String roomSn, ChatMessage message) {
+        chatEventService.publish(
+                chatRoomService.memberIds(roomSn),
+                "chat",
+                java.util.Map.of("type", "chat", "roomSn", roomSn, "message", message)
+        );
+    }
+
+    private String resolvePayScene(String payScene) {
+        if (payScene == null || payScene.trim().isEmpty()) {
+            return "native";
+        }
+        String scene = payScene.trim().toLowerCase();
+        if ("native".equals(scene) || "h5".equals(scene) || "jsapi".equals(scene)) {
+            return scene;
+        }
+        return "native";
+    }
+
+    private String buildReturnUrl(String orderSn) {
+        if (webBaseUrl == null || webBaseUrl.trim().isEmpty()) {
+            return null;
+        }
+        String base = webBaseUrl.trim();
+        if (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base + "/orders/" + orderSn;
     }
 
     @Override
@@ -227,17 +338,37 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
             throw new ApiException("订单不存在: " + orderSn);
         }
 
-        // 幂等保护：仅允许从「待付款」流转一次，重复回调直接返回，避免重复落支付事实
+        // 快速幂等：已处理过的订单直接返回
         if (order.getOrderStatus() != null && order.getOrderStatus() != OrderStatusEnum.PENDING_PAY.getCode()) {
             log.warn("【支付回调幂等拦截】订单号={} 当前状态={}，忽略重复的支付成功回调", orderSn, order.getOrderStatus());
             return;
         }
 
-        int actualAmount = (payAmount != null && payAmount > 0) ? payAmount : order.getTotalAmount();
+        // 金额校验：微信回调必须带金额，且必须与订单应付金额一致
+        if (payAmount == null && "wechat_pay".equalsIgnoreCase(payType)) {
+            throw new ApiException("支付回调缺少支付金额");
+        }
+        if (payAmount != null && !payAmount.equals(order.getTotalAmount())) {
+            log.error("【支付金额不一致】orderSn={}, 回调金额={}分, 应付金额={}分",
+                    orderSn, payAmount, order.getTotalAmount());
+            throw new ApiException("支付金额与订单应付金额不一致");
+        }
 
-        // 纯业务状态流转为待接单
+        int actualAmount = payAmount != null ? payAmount : order.getTotalAmount();
+
+        // 原子幂等：只有成功把「待付款」更新为「待接单」的事务，才允许落支付流水与发通知
+        int updated = baseMapper.update(null,
+                new LambdaUpdateWrapper<CompanionOrder>()
+                        .eq(CompanionOrder::getOrderSn, orderSn)
+                        .eq(CompanionOrder::getOrderStatus, OrderStatusEnum.PENDING_PAY.getCode())
+                        .set(CompanionOrder::getOrderStatus, OrderStatusEnum.PAID_WAIT_ACCEPT.getCode())
+                        .set(CompanionOrder::getUpdateTime, LocalDateTime.now())
+        );
+        if (updated == 0) {
+            log.warn("【支付回调并发幂等】订单号={} 已被其他回调处理，忽略本次重复回调", orderSn);
+            return;
+        }
         order.setOrderStatus(OrderStatusEnum.PAID_WAIT_ACCEPT.getCode());
-        updateById(order);
 
         // 【金融级支付事实落盘】向 pay_flow 记录真实发生的支付事实与通道扣费，彻底与订单表解耦
         int channelFee = (int) Math.round(actualAmount * currentChannelFeeRate());
@@ -255,12 +386,20 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         payFlow.setUpdateTime(LocalDateTime.now());
         payFlowMapper.insert(payFlow);
 
+        // 支付成功后向订单聊天室写入一条系统消息，把玩家与订单关键信息同步给陪玩师
+        insertOrderSystemMessage(order);
+
         // 触发平台线下通知 (订阅消息已下线, 改由管理员人工线下通知陪练师)
         if (order.getCompanionUserId() != null) {
             log.info("【下单成功生成通知事件】陪玩师[{}]收到新订单, 等待平台线下通知: orderSn={}",
                     order.getCompanionUserId(), orderSn);
             noticeService.createNewOrderNotice(order.getCompanionUserId(), orderSn, order.getGameName(),
                     order.getTotalAmount(), order.getClientRemark());
+            chatEventService.publish(
+                    java.util.List.of(order.getCompanionUserId()),
+                    "order",
+                    java.util.Map.of("type", "order", "orderSn", orderSn)
+            );
         } else {
             log.info("【公共大厅单】该订单无指定陪玩师，流转至派单大厅");
         }
@@ -307,6 +446,8 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         order.setOrderStatus(OrderStatusEnum.ACCEPTED_IN_SERVICE.getCode());
         order.setAcceptTime(LocalDateTime.now());
         updateById(order);
+        // 公共大厅单接单后补全聊天室成员，确保陪玩师能在消息列表看到该会话
+        chatRoomService.touch(orderSn, 0L, null);
 
         // 陪玩师收到订单后，同步生成一条平台通知事件，便于管理员掌握履约动态
         noticeService.createOrderAcceptedNotice(companionUserId, orderSn, order.getGameName(), order.getTotalAmount());
@@ -753,11 +894,14 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         ChatMessage sysMsg = new ChatMessage();
         sysMsg.setOrderSn(orderSn);
         sysMsg.setSenderId(0L);
+        sysMsg.setMessageType(1);
         sysMsg.setSenderName("系统提示");
         sysMsg.setSenderAvatar("https://img.icons8.com/color/96/shield.png");
         sysMsg.setContent("⏰ 陪玩师接单后超过 " + serviceTimeoutMinutes + " 分钟仍未完成服务，系统已为客户全额原路退款，本单已结束。");
         sysMsg.setCreateTime(LocalDateTime.now());
         chatMessageMapper.insert(sysMsg);
+        chatRoomService.touch(orderSn, 0L, sysMsg);
+        publishChatMessage(orderSn, sysMsg);
 
         log.info("【服务超时自动退款触发】订单[{}]陪玩师接单后超时未完成服务，已自动为客户[{}]全额退款！",
                 orderSn, order.getClientUserId());
@@ -789,11 +933,14 @@ public class CompanionOrderServiceImpl extends ServiceImpl<CompanionOrderMapper,
         ChatMessage sysMsg = new ChatMessage();
         sysMsg.setOrderSn(orderSn);
         sysMsg.setSenderId(0L);
+        sysMsg.setMessageType(1);
         sysMsg.setSenderName("平台维权中心");
         sysMsg.setSenderAvatar("https://img.icons8.com/color/96/shield.png");
         sysMsg.setContent("⚠️ 客户已发起售后维权争议申请，平台管理员已介入核实，当前订单暂停自动结算！");
         sysMsg.setCreateTime(LocalDateTime.now());
         chatMessageMapper.insert(sysMsg);
+        chatRoomService.touch(orderSn, 0L, sysMsg);
+        publishChatMessage(orderSn, sysMsg);
 
         // 生成平台待通知事件, 提示管理员尽快线下介入
         noticeService.createDisputeNotice(order.getClientUserId(), orderSn, order.getDisputeReason());

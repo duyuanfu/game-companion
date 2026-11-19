@@ -543,13 +543,18 @@ public class OrderFlowIntegrationTest {
         companionMsg.setSenderId(companionUserId);
         chatMessageService.sendMessage(companionUserId, companionMsg);
 
-        // 3. 断言房间内消息列表
+        // 3. 断言房间内消息列表（支付成功会额外写入一条订单系统消息）
         var list = chatMessageService.getOrderMessages(chatOrderSn);
         assertNotNull(list);
-        assertEquals(2, list.size(), "房间内必须严格记录 2 条真实消息");
-        assertEquals(clientUserId, list.get(0).getSenderId(), "第1条消息必须是客户发送");
-        assertEquals(companionUserId, list.get(1).getSenderId(), "第2条消息必须是甜心小鹿发送");
-        assertEquals("甜心小鹿", list.get(1).getSenderName(), "陪练师昵称必须真实显示为甜心小鹿");
+        var userMessages = list.stream()
+                .filter(message -> message.getMessageType() == null || message.getMessageType() == 0)
+                .toList();
+        assertEquals(2, userMessages.size(), "房间内必须严格记录 2 条真实用户消息");
+        assertEquals(clientUserId, userMessages.get(0).getSenderId(), "第1条用户消息必须是客户发送");
+        assertEquals(companionUserId, userMessages.get(1).getSenderId(), "第2条用户消息必须是甜心小鹿发送");
+        assertEquals("甜心小鹿", userMessages.get(1).getSenderName(), "陪练师昵称必须真实显示为甜心小鹿");
+        assertTrue(list.stream().anyMatch(message -> Integer.valueOf(1).equals(message.getMessageType())),
+                "支付成功后必须写入订单系统消息");
 
         System.out.println("✅ 开黑房间双方真实发信与同步测试通过！总消息数: " + list.size());
     }
