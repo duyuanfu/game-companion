@@ -929,6 +929,13 @@ curl http://127.0.0.1/api/health
 - 微信 H5 支付必须使用 HTTPS，纯 HTTP 只能用于本地或内网联调
 - 80 端口被占用时修改 `.env` 的 `WEB_HTTP_PORT`
 - 后续要切 HTTPS，直接按 5.2、5.3 加证书并用覆盖配置重建即可
+- 用 `http://IP:端口` 访问时，把该 Origin 一并加入白名单，避免 POST 被 CORS 拦截：
+
+  ```bash
+  CORS_ALLOWED_ORIGINS=http://8.137.89.240:8080,https://你的域名
+  ```
+
+  新版 web 镜像已按 `Host` 端口正确转发 `X-Forwarded-Port`，同源请求不会触发 CORS；旧镜像可通过白名单兜底。
 
 如果 HTTPS 必须由**已有宿主机 Nginx** 终止（例如该 Nginx 还服务其它站点），则不要用 `docker-compose.https.yml`：
 
